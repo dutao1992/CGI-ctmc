@@ -22,15 +22,20 @@ AUTO_EXIT_POLICY = {
     # Automatic closure is deliberately stricter than ordinary motion/event
     # detection.  It changes a user-confirmed fact, so speed alone or one GNSS
     # jump must never be enough.
-    'min_speed_ms': 2.0,
-    'min_duration_s': 5.0,
-    'min_samples': 5,
+    # A commissioning trolley may only reach 0.5 m/s.  Low speed is accepted
+    # only together with a long RTK displacement and a coherent path.
+    'min_speed_ms': 0.15,
+    'min_duration_s': 15.0,
+    'min_samples': 10,
     'max_gap_s': 1.5,
-    'max_position_std_m': 2.0,
+    'max_position_std_m': 1.0,
     'min_anchor_distance_m': 30.0,
     'min_displacement_m': 8.0,
+    'min_path_efficiency': 0.5,
     'nav_modes': [2],
-    'fix_modes': [4, 5],
+    # Heading readiness is not required to prove translation.  RTK fixed/float
+    # positions are accepted both with and without dual-antenna direction.
+    'fix_modes': [4, 5, 8, 9],
 }
 BITS = {key: 1 << i for i, key in enumerate(NUMERIC)}
 ALL_FIELDS = sum(BITS.values())
@@ -134,23 +139,31 @@ class ActiveStationaryExitDetector:
         candidate = self.candidates.get(context['id'])
         if (candidate is None or p['t'] <= candidate['last_t'] or
                 p['t'] - candidate['last_t'] > policy['max_gap_s']):
-            candidate = dict(start_t=p['t'], last_t=p['t'], start_point={'lat':p['lat'],'lon':p['lon']},
-                             count=1, min_speed=p['speed'], max_speed=p['speed'])
+            point = {'lat':p['lat'],'lon':p['lon']}
+            candidate = dict(start_t=p['t'], last_t=p['t'], start_point=point, last_point=point,
+                             path_distance=0.0, count=1, min_speed=p['speed'], max_speed=p['speed'])
             self.candidates[context['id']] = candidate
             return None
+        point = {'lat':p['lat'],'lon':p['lon']}
+        candidate['path_distance'] += distance(candidate['last_point'], point)
+        candidate['last_point'] = point
         candidate['last_t'] = p['t']
         candidate['count'] += 1
         candidate['min_speed'] = min(candidate['min_speed'], p['speed'])
         candidate['max_speed'] = max(candidate['max_speed'], p['speed'])
         duration = p['t'] - candidate['start_t']
         displacement = distance(candidate['start_point'], p)
+        path_efficiency = displacement / candidate['path_distance'] if candidate['path_distance'] else 0
         if (duration < policy['min_duration_s'] or candidate['count'] < policy['min_samples'] or
-                displacement < policy['min_displacement_m']):
+                displacement < policy['min_displacement_m'] or
+                path_efficiency < policy['min_path_efficiency']):
             return None
         anchor_distance = distance(p, context['profile']['anchor'])
         evidence = dict(
             detected_at=p['t'], candidate_start=candidate['start_t'], duration_s=round(duration,3),
             samples=candidate['count'], displacement_m=round(displacement,3),
+            path_distance_m=round(candidate['path_distance'],3),
+            path_efficiency=round(path_efficiency,3),
             anchor_distance_m=round(anchor_distance,3), min_speed_ms=round(candidate['min_speed'],3),
             max_speed_ms=round(candidate['max_speed'],3), position_std_m=round(std,3),
             nav_mode=p['nav_mode'], fix_mode=p['fix_mode'], policy=policy,

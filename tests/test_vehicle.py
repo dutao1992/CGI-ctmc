@@ -451,12 +451,21 @@ class QualityTests(unittest.TestCase):
                     altered(tow=tow+35,status='42',speed=3,lat=p['lat']+.0005,
                             lat_std=.5,lon_std=.5,alt_std=1))
         with self.store.connect() as c:self.assertTrue(quality.contexts(c,'6094510')[-1]['active'])
-        # Fused RTK motion must remain continuous for five seconds and move at
-        # least eight metres after already leaving the static anchor.
-        self.ingest(*[altered(tow=tow+40+i*.5,status='42',speed=3,lat=p['lat']+.0004+i*.00001,
-                              lat_std=.5,lon_std=.5,alt_std=1) for i in range(13)])
-        last_t=self.t+46
-        self.assertEqual(self.store.point('6094510',last_t)['speed'],3)
+        # A long but indecisive RTK path is not enough: net displacement and
+        # path efficiency must both confirm translation rather than wandering.
+        self.ingest(*[altered(tow=tow+40+i*.5,status='92',speed=.5,
+                              lat=p['lat']+.00035+(i%10)*.000002,
+                              lat_std=.5,lon_std=.5,alt_std=1) for i in range(40)])
+        with self.store.connect() as c:self.assertTrue(quality.contexts(c,'6094510')[-1]['active'])
+        self.ingest(altered(tow=tow+60,status='92',speed=.05,lat=p['lat']+.00035,
+                            lat_std=.5,lon_std=.5,alt_std=1))
+        # A 0.5 m/s commissioning trolley with combination navigation and an
+        # undirected RTK float still closes after a coherent eight-metre path.
+        self.ingest(*[altered(tow=tow+61+i*.5,status='92',speed=.5,
+                              lat=p['lat']+.00035+i*.0000025,
+                              lat_std=.5,lon_std=.5,alt_std=1) for i in range(41)])
+        last_t=self.t+81
+        self.assertEqual(self.store.point('6094510',last_t)['speed'],.5)
         with self.store.connect() as c:
             context=quality.contexts(c,'6094510')[-1]
             audit=c.execute("SELECT * FROM audit WHERE action='quality.stationary_context.auto_close'").fetchone()
@@ -465,8 +474,10 @@ class QualityTests(unittest.TestCase):
                     c.execute('SELECT SUM(point_count) FROM point_rollups WHERE bucket_s=60').fetchone()[0])
         self.assertFalse(context['active']);self.assertLess(context['end'],last_t)
         self.assertEqual(context['closure']['actor'],'system/automatic')
-        self.assertGreaterEqual(context['closure']['duration_s'],5)
+        self.assertGreaterEqual(context['closure']['duration_s'],15)
         self.assertGreaterEqual(context['closure']['displacement_m'],8)
+        self.assertGreaterEqual(context['closure']['path_efficiency'],.5)
+        self.assertEqual(context['closure']['fix_mode'],9)
         self.assertEqual(audit['target'],scope['id'])
         self.assertEqual(counts,(counts[0],counts[0],counts[0]))
 
