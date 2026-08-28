@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # CTMC CGI 车载数据服务
 
 线上入口：[quality-ctmc.cloud/vehicle/](https://quality-ctmc.cloud/vehicle/)，也可从质检主页第 05 个业务模块进入。使用现有平台账号；管理员默认新增 vehicle 权限，其他账号由用户管理显式授权。
