@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>惯导分析参数详解 · CGI-430</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0f1a28;font-family:'PingFang SC','Helvetica Neue',sans-serif;color:#ddeeff;overflow:hidden;height:100vh}
+  .deck{position:relative;width:100vw;height:100vh}
+  .slide{position:absolute;inset:0;display:none;flex-direction:column;padding:48px 68px;opacity:0;transition:opacity .3s}
+  .slide.active{display:flex;opacity:1}
+  :root{--b:#1e3a5f;--b2:#2a5280;--b3:#4a90d9;--cyan:#3dd6f5;--gold:#e8c04a;--red:#e05050;--green:#42c07a;--dim:#6a8fbb;--card:#141f30;--border:#1e3552;--warn:#d4703a}
+  .eyebrow{font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--dim);margin-bottom:12px}
+  h1{font-size:44px;font-weight:700;line-height:1.2;color:#fff}
+  h1 span{color:var(--cyan)}
+  h2{font-size:28px;font-weight:600;color:#c8e0ff;margin-bottom:18px}
+  h3{font-size:16px;font-weight:600;color:var(--cyan);margin-bottom:8px}
+  p,li{font-size:14px;line-height:1.75;color:#a0c0e0}
+  li{margin-left:20px}
+  strong{color:#ddeeff}
+  code{background:#0d1520;border:1px solid var(--border);border-radius:4px;padding:1px 6px;font-family:'JetBrains Mono','Courier New',monospace;font-size:12px;color:var(--cyan)}
+  .cols{display:grid;gap:20px;flex:1;align-content:start}
+  .cols-2{grid-template-columns:1fr 1fr}
+  .cols-3{grid-template-columns:1fr 1fr 1fr}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px;position:relative;overflow:hidden}
+  .card::before{content:'';position:absolute;top:0;left:0;width:3px;height:100%;background:var(--b3)}
+  .card.gold::before{background:var(--gold)}
+  .card.red::before{background:var(--red)}
+  .card.green::before{background:var(--green)}
+  .card.warn::before{background:var(--warn)}
+  .card h3{margin-top:0}
+  .pill{display:inline-block;background:#0d2040;border:1px solid var(--b2);border-radius:20px;padding:3px 12px;font-size:12px;color:var(--b3);margin:3px}
+  .pill.warn{border-color:var(--warn);color:var(--warn)}
+  .pill.green{border-color:var(--green);color:var(--green)}
+  .pill.gold{border-color:var(--gold);color:var(--gold)}
+  .badge{display:inline-block;background:var(--b2);border-radius:6px;padding:2px 10px;font-size:12px;font-weight:700;color:#fff;margin-right:6px}
+  .badge.gold{background:#7a5a10}
+  .badge.red{background:#6a1a1a}
+  .badge.green{background:#0d4a2a}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{background:#111e2e;color:var(--dim);text-align:left;padding:8px 12px;font-weight:600;letter-spacing:.05em;border-bottom:2px solid var(--border)}
+  td{padding:8px 12px;border-bottom:1px solid var(--border);color:#a0c0e0;vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td strong{color:#ddeeff}
+  td.warn{color:var(--warn);font-weight:600}
+  td.ok{color:var(--green);font-weight:600}
+  .cover{justify-content:center}
+  .cover .hero{margin-bottom:40px}
+  .cover .subtitle{font-size:18px;color:var(--dim);margin-top:14px}
+  .cover .mark{font-size:68px;font-weight:900;background:linear-gradient(135deg,var(--cyan),var(--b3));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+  .progress{position:fixed;bottom:0;left:0;height:2px;background:linear-gradient(90deg,var(--b2),var(--cyan));transition:width .3s}
+  .nav{position:fixed;bottom:20px;right:28px;display:flex;gap:12px;align-items:center;z-index:99}
+  .nav button{background:var(--card);border:1px solid var(--border);border-radius:8px;color:#a0c0e0;padding:8px 18px;font-size:13px;cursor:pointer;transition:all .2s}
+  .nav button:hover{border-color:var(--cyan);color:#fff}
+  .counter{font-size:12px;color:var(--dim)}
+  .section-tag{background:var(--b2);border-radius:6px;padding:2px 10px;font-size:11px;font-weight:700;letter-spacing:.1em;color:#a8d0ff;display:inline-block;margin-bottom:14px}
+  .big{font-size:36px;font-weight:700;color:var(--cyan);line-height:1.1}
+  .big small{font-size:14px;color:var(--dim);font-weight:400;display:block;margin-top:4px}
+  hr{border:none;border-top:1px solid var(--border);margin:16px 0}
+  /* warning box */
+  .alert{border-radius:8px;padding:12px 16px;margin-top:12px;font-size:13px;line-height:1.6}
+  .alert.warn{background:#1a1000;border:1px solid var(--warn);color:#f0b870}
+  .alert.ok{background:#001a0d;border:1px solid var(--green);color:#70e0a0}
+  .alert.info{background:#001828;border:1px solid var(--b3);color:#90c8f0}
+  /* threshold row */
+  .thresh-row{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+  .thresh-bar{flex:1;height:10px;border-radius:5px;background:#0d1520;overflow:hidden;position:relative}
+  .thresh-fill{height:100%;border-radius:5px}
+  /* axis diagram */
+  .axis-diagram{background:#0d1520;border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center;font-size:12px;color:var(--dim)}
+  .axis-diagram .center{display:inline-block;border:2px solid var(--b3);border-radius:6px;padding:6px 16px;color:var(--cyan);font-weight:700;margin:8px}
+  .axis-diagram .arrow{color:var(--b3);font-size:14px}
+</style>
+</head>
+<body>
+<div class="deck">
+
+<!-- SLIDE 1 · 封面 -->
+<div class="slide cover active" id="s1">
+  <div class="hero">
+    <div class="mark">IMU</div>
+    <h1>惯导分析参数<span>全解</span><br>通俗易懂版</h1>
+    <p class="subtitle">CGI-430 GPCHCX · 28 个惯导参数的用途、解读方式与运输行业警戒参考</p>
+  </div>
+  <div style="display:flex;gap:24px;margin-top:24px">
+    <span class="pill green">28 个参数</span>
+    <span class="pill gold">12 组图表</span>
+    <span class="pill">JT/T 794 参考</span>
+    <span class="pill warn">含警戒线建议</span>
+  </div>
+</div>
+
+<!-- SLIDE 2 · 参数地图 -->
+<div class="slide" id="s2">
+  <div class="eyebrow">OVERVIEW</div>
+  <h2>参数全景地图</h2>
+  <div class="cols cols-3">
+    <div class="card">
+      <div class="section-tag">位置与高程</div>
+      <p><span class="pill green">lat / lon</span><span class="pill">alt</span></p>
+      <p style="margin-top:8px">设备在地球上的绝对位置。WGS84 坐标系。</p>
+    </div>
+    <div class="card">
+      <div class="section-tag">姿态三角</div>
+      <p><span class="pill green">heading</span><span class="pill warn">pitch</span><span class="pill warn">roll</span></p>
+      <p style="margin-top:8px">车辆朝向与倾斜状态，安全行驶的空间姿势描述。</p>
+    </div>
+    <div class="card">
+      <div class="section-tag">角速度（陀螺仪）</div>
+      <p><span class="pill">gx</span><span class="pill">gy</span><span class="pill">gz</span></p>
+      <p style="margin-top:8px">车辆旋转有多快，单位 °/s。感知急转、侧翻前兆。</p>
+    </div>
+    <div class="card">
+      <div class="section-tag">加速度（比力）</div>
+      <p><span class="pill warn">ax</span><span class="pill warn">ay</span><span class="pill warn">az</span></p>
+      <p style="margin-top:8px">含重力的合力感知，急加减速、颠簸冲击均可见。</p>
+    </div>
+    <div class="card">
+      <div class="section-tag">速度分量</div>
+      <p><span class="pill">ve / vn / vu</span><span class="pill green">speed</span></p>
+      <p style="margin-top:8px">东/北/天三方向及合成平面速度，km/h。</p>
+    </div>
+    <div class="card">
+      <div class="section-tag">精度指标（σ）</div>
+      <p><span class="pill">位置σ</span><span class="pill">速度σ</span><span class="pill">姿态σ</span></p>
+      <p style="margin-top:8px">设备自报的估计不确定度，数值越小定位越可信。</p>
+    </div>
+    <div class="card">
+      <div class="section-tag">卫星与差分</div>
+      <p><span class="pill">sat1 / sat2</span><span class="pill warn">age</span></p>
+      <p style="margin-top:8px">使用卫星颗数和差分数据新鲜度，判断定位可靠性。</p>
+    </div>
+    <div class="card">
+      <div class="section-tag">航迹角</div>
+      <p><span class="pill">course</span><span class="pill">course_std</span></p>
+      <p style="margin-top:8px">基于运动轨迹的行驶方向（需速度≥1 m/s 才有意义）。</p>
+    </div>
+    <div class="card">
+      <div class="section-tag">导航状态</div>
+      <p><span class="pill green">nav_mode</span><span class="pill gold">fix_mode</span></p>
+      <p style="margin-top:8px">系统当前工作在哪种融合模式，决定所有数据的可信程度。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 3 · 导航状态（最重要的字段） -->
+<div class="slide" id="s3">
+  <div class="eyebrow">NAVIGATION STATUS · 最重要的字段</div>
+  <h2>先看状态：所有测量值的前提</h2>
+  <div class="alert info">💡 在看任何惯导数值之前，先确认导航状态。状态不对，数值再好看也没意义。</div>
+  <div class="cols cols-2" style="margin-top:20px">
+    <div>
+      <h3>nav_mode · 导航模式（低 4bit）</h3>
+      <table>
+        <tr><th>值</th><th>含义</th><th>数据可用性</th></tr>
+        <tr><td><strong>0</strong></td><td>初始化中</td><td class="warn">❌ 所有测量不可用</td></tr>
+        <tr><td><strong>1</strong></td><td>纯卫导模式</td><td>位置可用，IMU 辅助有限</td></tr>
+        <tr><td><strong>2</strong></td><td>组合导航（最优）</td><td class="ok">✅ 全部字段可信</td></tr>
+        <tr><td><strong>3</strong></td><td>纯惯导推算</td><td>卫星中断，漂移累积</td></tr>
+      </table>
+    </div>
+    <div>
+      <h3>fix_mode · 定位模式（高 4bit）</h3>
+      <table>
+        <tr><th>值</th><th>含义</th><th>精度等级</th></tr>
+        <tr><td><strong>0</strong></td><td>无定位</td><td class="warn">❌ 位置无效</td></tr>
+        <tr><td><strong>1/6</strong></td><td>单点定位</td><td>±3 m（水平）</td></tr>
+        <tr><td><strong>2/7</strong></td><td>伪距差分</td><td>±1 m（水平）</td></tr>
+        <tr><td><strong>4</strong></td><td>RTK 固定解 + 定向</td><td class="ok">±2 cm（水平）</td></tr>
+        <tr><td><strong>5</strong></td><td>RTK 浮点解 + 定向</td><td>±5 cm–10 cm</td></tr>
+        <tr><td><strong>8</strong></td><td>RTK 固定解（未定向）</td><td class="ok">±2 cm</td></tr>
+      </table>
+      <div class="alert warn" style="margin-top:12px">RTK 固定解（4/8）是厘米级精度的前提。非固定解时请勿按厘米级解读位置数据。</div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 4 · 位置与高程 -->
+<div class="slide" id="s4">
+  <div class="eyebrow">01 / POSITION</div>
+  <h2>位置与高程：lat / lon / alt</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="card" style="margin-bottom:16px">
+        <h3>lat · 纬度（°）</h3>
+        <p><strong>是什么：</strong>设备所在位置的南北方向坐标，WGS84 椭球体。</p>
+        <p><strong>能看出什么：</strong>设备是否发生了南北位移，结合高德地图轨迹定位车辆路线。</p>
+        <p><strong>正常范围：</strong>中国大陆约 20–53°N。静止时微小漂移（GNSS 精度限制）属正常。</p>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <h3>lon · 经度（°）</h3>
+        <p><strong>是什么：</strong>设备所在位置的东西方向坐标。</p>
+        <p><strong>能看出什么：</strong>判断车辆是否偏离预期路线，识别绕路或临时停驶。</p>
+      </div>
+      <div class="card">
+        <h3>alt · 高程（m）</h3>
+        <p><strong>是什么：</strong>相对于 WGS84 椭球体的高度（不是海拔，略高于实际海拔）。</p>
+        <p><strong>能看出什么：</strong>上坡/下坡趋势；隧道进出时卫星信号中断导致高程跳变；载货后车身下沉（变化量通常 &lt;10 cm）。</p>
+      </div>
+    </div>
+    <div>
+      <div class="section-tag">INDUSTRY REFERENCE</div>
+      <table>
+        <tr><th>指标</th><th>参考标准</th><th>说明</th></tr>
+        <tr><td>位置精度</td><td>RTK 固定：≤ 2 cm + 1 ppm</td><td>CGI-430 标称</td></tr>
+        <tr><td>静止漂移上限</td><td>本平台配置 ≤ 15 m</td><td>超出判为位置异常</td></tr>
+        <tr><td>位置跳变</td><td>本平台判定：超出速度预测 + 20 m</td><td>记录 position_jump 事件</td></tr>
+      </table>
+      <div class="alert warn" style="margin-top:16px">
+        <strong>注意 WGS84 vs GCJ-02：</strong>数据库存储 WGS84 原始坐标；高德地图展示时在前端转换为 GCJ-02（国测局坐标）。两套坐标直接叠加会偏移约 100–500 m，切勿混用。
+      </div>
+      <div class="alert ok" style="margin-top:12px">
+        <strong>正常特征：</strong>静止期位置在 1–5 m 范围内随机漂移，无明显方向性趋势。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 5 · 姿态角 -->
+<div class="slide" id="s5">
+  <div class="eyebrow">02 / ATTITUDE</div>
+  <h2>姿态三角：heading / pitch / roll</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="axis-diagram" style="margin-bottom:16px">
+        <div style="font-size:13px;margin-bottom:8px;color:#a0c0e0">车辆坐标系（安装朝向决定轴向）</div>
+        <div><span class="arrow">↑ 北</span> <span class="center">车辆</span> <span class="arrow">→ 东</span></div>
+        <div style="margin-top:8px">
+          <span style="color:var(--cyan)">heading</span>: 车头方向，0° = 正北，顺时针增大<br>
+          <span style="color:var(--gold)">pitch</span>: 车头上仰为正，下倾为负<br>
+          <span style="color:var(--warn)">roll</span>: 右倾为正，左倾为负（安装依赖）
+        </div>
+      </div>
+      <div class="card">
+        <h3>heading · 航向角（0–360°）</h3>
+        <p>描述车辆当前朝向哪个方向。<strong>需要 nav_mode=2 且 fix_mode ∈ {1,2,3,4,5}</strong> 才有意义（双天线定向）。</p>
+        <p style="margin-top:6px"><strong>能看出什么：</strong>车辆转弯方向、是否掉头、是否在不应有的方向行驶。</p>
+      </div>
+    </div>
+    <div>
+      <div class="card gold" style="margin-bottom:14px">
+        <h3>pitch · 俯仰角（-90° ~ +90°）</h3>
+        <p>车头相对于水平面的仰角。正值：爬坡/上坡。负值：下坡。</p>
+        <p style="margin-top:6px"><strong>解读价值：</strong>路面坡度、急制动时车头下沉（负 pitch 突增）、车辆是否颠覆（|pitch| > 30° 极端危险）。</p>
+        <div class="alert warn" style="margin-top:8px;padding:8px 12px">
+          <strong>行业参考：</strong>JT/T 794 未直接规定俯仰阈值，工程经验：正常行驶 |pitch| &lt; 8°；山路可达 15°；超过 <strong>20°</strong> 建议关注。
+        </div>
+      </div>
+      <div class="card warn">
+        <h3>roll · 横滚角（-180° ~ +180°）</h3>
+        <p>车辆左右倾斜角度，是<strong>侧翻风险最直接的指标</strong>。</p>
+        <p style="margin-top:6px"><strong>注意：</strong>安装倾斜时静止横滚值不为 0°，需以安装基准值为参考。</p>
+        <div class="alert warn" style="margin-top:8px;padding:8px 12px">
+          <strong>行业参考：</strong>道路运输危险货物法规关注侧翻，工程经验：|roll| &gt; <strong>10°</strong> 告警；|roll| &gt; <strong>15°</strong> 紧急；|roll| &gt; 25° 已极度危险。
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 6 · 角速度 -->
+<div class="slide" id="s6">
+  <div class="eyebrow">03 / GYROSCOPE</div>
+  <h2>角速度（陀螺仪）：gx / gy / gz</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="card" style="margin-bottom:14px">
+        <h3>🔄 是什么</h3>
+        <p>陀螺仪测量车辆绕三个轴的<strong>旋转速度</strong>，单位 °/s。三个分量分别对应车辆的滚转（gx）、俯仰变化率（gy）、偏转变化率（gz）。</p>
+        <p style="margin-top:8px">与 roll/pitch/heading 的关系：姿态角是积分结果，角速度是瞬时变化率。</p>
+      </div>
+      <div class="card gold" style="margin-bottom:14px">
+        <h3>👁️ 能看出什么</h3>
+        <ul>
+          <li><strong>急转弯</strong>：gz（偏航方向）峰值明显</li>
+          <li><strong>颠簸/路况</strong>：gy（俯仰方向）高频振荡</li>
+          <li><strong>侧翻前兆</strong>：gx（滚转方向）快速增大</li>
+          <li><strong>陀螺漂移</strong>：静止时非零值，是噪声基准</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>📊 正常静止噪声水平</h3>
+        <p>CGI-430 陀螺零偏稳定性约 <code>0.01–0.1 °/s</code>。静止时各轴应在 ±0.15 °/s 以内（平台使用的工程底线）。</p>
+      </div>
+    </div>
+    <div>
+      <div class="section-tag">REFERENCE THRESHOLDS</div>
+      <table>
+        <tr><th>场景</th><th>gz 参考值</th><th>gx 参考值</th></tr>
+        <tr><td>正常转弯（30 km/h，半径 20m）</td><td>≈ 12 °/s</td><td>&lt; 5 °/s</td></tr>
+        <tr><td>急转弯（60 km/h，半径 20m）</td><td>≈ 24 °/s</td><td>&lt; 10 °/s</td></tr>
+        <tr><td>侧翻前 0.3s</td><td>&gt; 40 °/s</td><td>&gt; 30 °/s</td></tr>
+        <tr><td>静止噪声（平台底线）</td><td>≤ 0.15 °/s</td><td>≤ 0.15 °/s</td></tr>
+      </table>
+      <div class="alert info" style="margin-top:14px">
+        <strong>读图提示：</strong>在 6 小时以内的时间窗口，图表展示原始采样（~10 Hz），可见高频振荡。长窗口展示 60 秒桶的均值和 min/max 包络，峰值仍然可见。
+      </div>
+      <div class="alert warn" style="margin-top:10px">
+        <strong>安装未确认时：</strong>轴向定义依赖安装方式，gx/gy/gz 的物理含义（滚转/俯仰/偏航）需结合安装标定才能准确解读。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 7 · 比力（加速度） -->
+<div class="slide" id="s7">
+  <div class="eyebrow">04 / ACCELEROMETER · 最关键的安全指标</div>
+  <h2>比力（加速度）：ax / ay / az</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="card warn" style="margin-bottom:14px">
+        <h3>⚠️ 关键概念：比力 ≠ 运动加速度</h3>
+        <p>比力 = 运动加速度 + 重力。静止水平放置时，az ≈ 1g（地球重力），ax ≈ ay ≈ 0。</p>
+        <p style="margin-top:6px">如果设备安装倾斜（如侧面安装），重力会分量到多个轴，导致<strong>静止时某轴不为零，这属于正常现象</strong>。</p>
+      </div>
+      <div class="card" style="margin-bottom:14px">
+        <h3>👁️ 能看出什么</h3>
+        <ul>
+          <li><strong>急加速</strong>：ax（纵向）正向突增</li>
+          <li><strong>急制动</strong>：ax 负向突降（可超过 -0.5 g）</li>
+          <li><strong>急转弯</strong>：ay（横向）偏离基准值</li>
+          <li><strong>路面颠簸/冲击</strong>：az 骤变，合成比力 |√(ax²+ay²+az²) - 1| 超限</li>
+          <li><strong>侧翻</strong>：az 接近 0，ay 接近 ±1 g</li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      <div class="section-tag">SHOCK CALCULATION</div>
+      <div class="card gold" style="margin-bottom:14px">
+        <h3>🧮 冲击计算公式</h3>
+        <p>平台使用的冲击度量（去除重力基准后的合矢量）：</p>
+        <p style="font-size:20px;color:var(--cyan);text-align:center;margin:12px 0;font-family:monospace">shock = |√(ax²+ay²+az²) − 1|</p>
+        <p>扣除 1g 重力后，剩余部分代表纯运动引起的动态冲击力。</p>
+      </div>
+      <div class="section-tag">INDUSTRY REFERENCE</div>
+      <table>
+        <tr><th>等级</th><th>shock 值</th><th>参考情景</th></tr>
+        <tr><td class="ok">正常驾驶</td><td>&lt; 0.3 g</td><td>平整路面正常行驶</td></tr>
+        <tr><td>工程告警</td><td>&gt; <strong>0.5 g</strong></td><td>平台默认阈值（可调）</td></tr>
+        <tr><td class="warn">急剧冲击</td><td>&gt; 0.8 g</td><td>大坑、急刹车</td></tr>
+        <tr><td class="warn">危险</td><td>&gt; 1.5 g</td><td>碰撞前兆 / 严重颠簸</td></tr>
+        <tr><td class="warn">碰撞级</td><td>&gt; 3 g</td><td>事故级冲击</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 8 · 速度 -->
+<div class="slide" id="s8">
+  <div class="eyebrow">05 / VELOCITY</div>
+  <h2>速度字段：speed / ve / vn / vu</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="card" style="margin-bottom:14px">
+        <h3>speed · 车辆平面速度（m/s，展示转 km/h）</h3>
+        <p>水平合速度 √(ve² + vn²)，GNSS/IMU 融合输出。</p>
+        <p style="margin-top:6px"><strong>能看出什么：</strong>超速识别（默认阈值 80 km/h，可调）；行驶/停留状态区分（≥1 m/s = 运动）；急加减速计算（相邻原始采样差值 / 时间间隔）。</p>
+        <div class="alert warn" style="margin-top:8px;padding:8px">
+          <strong>重要：</strong>速度是 GNSS 多普勒 + IMU 融合，不是轮速，不是 CAN 里程。绝对值可信，但不等于交通执法使用的车速。
+        </div>
+      </div>
+      <div class="card">
+        <h3>ve / vn / vu · 三向速度分量（m/s）</h3>
+        <p><strong>ve</strong>：东向速度（正东为正）<br><strong>vn</strong>：北向速度（正北为正）<br><strong>vu</strong>：天向速度（上升为正）</p>
+        <p style="margin-top:6px"><strong>能看出什么：</strong>行驶方向分析；vu 反映车辆在垂直方向的状态（上坡/下坡时有小量，静止时应接近 0）。</p>
+      </div>
+    </div>
+    <div>
+      <div class="section-tag">ACCELERATION DETECTION</div>
+      <div class="card gold" style="margin-bottom:14px">
+        <h3>🏎️ 急加速 / 急制动检测逻辑</h3>
+        <p>基于 <strong>0.8–2.5 秒窗口内</strong>相邻原始采样的速度差：</p>
+        <p style="font-size:16px;color:var(--cyan);font-family:monospace;margin:10px 0">accel = (v_now − v_baseline) / Δt</p>
+        <table style="font-size:12px">
+          <tr><th>事件</th><th>默认阈值</th><th>JT/T 794 参考</th></tr>
+          <tr><td>急加速</td><td>&gt; <strong>3 m/s²</strong></td><td>≥ 2.5–3 m/s²（部分规范）</td></tr>
+          <tr><td>急制动</td><td>&gt; <strong>3.5 m/s²</strong></td><td>≥ 3 m/s²（部分规范）</td></tr>
+        </table>
+      </div>
+      <div class="section-tag">SPEED THRESHOLDS</div>
+      <table>
+        <tr><th>场景</th><th>参考速度</th><th>规范依据</th></tr>
+        <tr><td>城市道路超速</td><td>&gt; 60 km/h</td><td>道路限速（按实际路况）</td></tr>
+        <tr><td>平台工程阈值</td><td>&gt; <strong>80 km/h</strong></td><td>默认可调</td></tr>
+        <tr><td>超速 20%（危货）</td><td>&gt; 72 km/h（60限速路）</td><td>JT 293 道路危险货物</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 9 · 位置标准差 -->
+<div class="slide" id="s9">
+  <div class="eyebrow">06 / POSITION UNCERTAINTY</div>
+  <h2>位置不确定度：lat_std / lon_std / alt_std</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="card" style="margin-bottom:14px">
+        <h3>是什么</h3>
+        <p>设备自报的位置估计误差（标准差，1σ），单位 m。这是系统的<strong>自我评估</strong>，不是独立测量的实际误差。</p>
+        <ul style="margin-top:8px">
+          <li><strong>lat_std</strong>：南北方向位置不确定度</li>
+          <li><strong>lon_std</strong>：东西方向位置不确定度</li>
+          <li><strong>alt_std</strong>：高程不确定度（通常比水平大 1.5–3 倍）</li>
+        </ul>
+      </div>
+      <div class="card gold">
+        <h3>能看出什么</h3>
+        <ul>
+          <li>卫星信号是否受遮挡（楼宇峡谷、隧道）</li>
+          <li>RTK 差分质量是否下降</li>
+          <li>是否处于多路径干扰环境</li>
+          <li>位置数据可信程度（辅助质量门控决策）</li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      <div class="section-tag">QUALITY THRESHOLDS</div>
+      <table>
+        <tr><th>定位等级</th><th>水平 σ 参考</th><th>典型场景</th></tr>
+        <tr><td class="ok">RTK 固定解</td><td>&lt; 0.05 m</td><td>空旷区域、基站信号好</td></tr>
+        <tr><td>RTK 浮点解</td><td>0.05–0.5 m</td><td>信号略有干扰</td></tr>
+        <tr><td>伪距差分</td><td>0.5–2 m</td><td>城市环境</td></tr>
+        <tr><td class="warn">单点定位</td><td>1–5 m</td><td>无差分信号</td></tr>
+        <tr><td class="warn">纯惯导推算</td><td>快速增长</td><td>无卫星覆盖</td></tr>
+      </table>
+      <div class="alert info" style="margin-top:14px">
+        <strong>平台质量门控：</strong>
+        <ul style="margin-top:6px">
+          <li>水平 σ &gt; <strong>2 m</strong>：触发 position_std 信息事件</li>
+          <li>水平 σ &gt; <strong>5 m</strong>（静止区段）：判为位置不确定度超限异常</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 10 · 姿态和速度标准差 -->
+<div class="slide" id="s10">
+  <div class="eyebrow">07 / ATTITUDE &amp; VELOCITY UNCERTAINTY</div>
+  <h2>姿态与速度标准差</h2>
+  <div class="cols cols-3">
+    <div class="card">
+      <div class="section-tag">姿态标准差</div>
+      <h3>heading_std（°）</h3>
+      <p>航向角不确定度。双天线配置下 RTK 固定时可达 <strong>0.1°</strong> 以内；单天线或定向未就绪时此字段被屏蔽（不展示）。</p>
+      <hr>
+      <h3>pitch_std / roll_std（°）</h3>
+      <p>俯仰和横滚角不确定度。组合导航充分收敛后通常 &lt; 0.5°。增大时说明 IMU 与 GNSS 融合质量下降，姿态数据可靠性降低。</p>
+    </div>
+    <div class="card gold">
+      <div class="section-tag">速度标准差</div>
+      <h3>ve_std / vn_std / vu_std（m/s）</h3>
+      <p>东/北/天三方向速度分量的不确定度。</p>
+      <ul style="margin-top:8px">
+        <li>RTK 固定解时：≈ 0.01–0.05 m/s</li>
+        <li>伪距差分时：≈ 0.05–0.2 m/s</li>
+        <li>纯惯导推算时：快速增长</li>
+      </ul>
+      <div class="alert info" style="margin-top:10px;padding:8px">
+        vu_std 通常比水平速度 σ 大 2–3 倍，这是垂向 GNSS 精度结构的正常特征。
+      </div>
+    </div>
+    <div class="card">
+      <div class="section-tag">如何使用这些标准差</div>
+      <h3>📐 质量决策参考</h3>
+      <ul>
+        <li>急加减速事件：检查 lat_std/lon_std 是否在 position_std_m 阈值以内（超出时不生成事件）</li>
+        <li>横滚/俯仰事件：pitch_std/roll_std 大时参考价值降低</li>
+        <li>速度积分里程：ve/vn 标准差大时里程精度降低</li>
+      </ul>
+      <hr>
+      <h3>🔍 诊断用途</h3>
+      <p>标准差随时间异常增大 → 可能存在多路径干扰或卫星几何结构不良（GDOP 劣化）。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 11 · 卫星与差分 -->
+<div class="slide" id="s11">
+  <div class="eyebrow">08 / GNSS HEALTH</div>
+  <h2>卫星质量指标：sat1 / sat2 / age</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="card" style="margin-bottom:14px">
+        <h3>sat1 · 主天线使用卫星数</h3>
+        <p>当前参与定位计算的卫星颗数。数量越多，定位几何结构越好，精度越高。</p>
+        <table style="margin-top:10px;font-size:12px">
+          <tr><th>卫星数</th><th>含义</th></tr>
+          <tr><td class="warn">&lt; 4 颗</td><td>无法定位（至少需要 4 颗）</td></tr>
+          <tr><td>4–6 颗</td><td>勉强定位，精度差</td></tr>
+          <tr><td>7–10 颗</td><td>正常定位</td></tr>
+          <tr><td class="ok">≥ 10 颗</td><td>良好，RTK 条件充足</td></tr>
+        </table>
+      </div>
+      <div class="card">
+        <h3>sat2 · 副天线使用卫星数</h3>
+        <p>双天线架构下副天线的卫星计数，主要用于航向角（heading）计算。副天线卫星少 → heading 精度降低。</p>
+      </div>
+    </div>
+    <div>
+      <div class="card warn" style="margin-bottom:14px">
+        <h3>age · 差分延迟（s）</h3>
+        <p>当前 GNSS 差分数据的"年龄"——距离最新一次收到差分改正数的时间。</p>
+        <p style="margin-top:8px"><strong>数值含义：</strong></p>
+        <ul>
+          <li><strong>age = 0</strong>：使用最新差分，定位最优</li>
+          <li><strong>age = 1–5 s</strong>：轻微延迟，精度略降</li>
+          <li><strong>age = 5–10 s</strong>：延迟明显，接近从差分降级</li>
+          <li><strong>age &gt; 10 s</strong>：差分严重滞后，位置精度不可靠</li>
+          <li><strong>age 缺失/跳变</strong>：差分信号中断</li>
+        </ul>
+      </div>
+      <div class="section-tag">INDUSTRY REFERENCE</div>
+      <table>
+        <tr><th>标准/规范</th><th>差分延迟要求</th></tr>
+        <tr><td>JT/T 794（部分版本）</td><td>建议 age ≤ 5 s</td></tr>
+        <tr><td>本平台工程阈值</td><td>age &gt; <strong>10 s</strong> 触发告警</td></tr>
+        <tr><td>RTCM 差分协议</td><td>通常 1 Hz 更新，理想 age &lt; 1 s</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 12 · 航迹角 -->
+<div class="slide" id="s12">
+  <div class="eyebrow">09 / COURSE OVER GROUND</div>
+  <h2>航迹角：course / course_std</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="card" style="margin-bottom:14px">
+        <h3>course · 航迹角（°，0–360）</h3>
+        <p>基于<strong>运动轨迹</strong>计算出的行驶方向（地速方向）。与 heading 的区别：</p>
+        <ul style="margin-top:8px">
+          <li><strong>heading</strong>：车头指向（双天线融合，与车辆朝向一致）</li>
+          <li><strong>course</strong>：实际移动方向（速度矢量方向，受侧风/侧滑影响可与 heading 不同）</li>
+        </ul>
+        <div class="alert warn" style="margin-top:10px;padding:8px">
+          <strong>重要限制：</strong>速度 &lt; 1 m/s 时 course 值无意义（此时被屏蔽）。静止时 course 不展示。
+        </div>
+      </div>
+      <div class="card">
+        <h3>course_std · 航迹角标准差（°）</h3>
+        <p>航迹角估计的不确定度。低速时 course_std 很大，高速时收敛到 &lt; 1°。</p>
+      </div>
+    </div>
+    <div>
+      <div class="card gold">
+        <h3>🧭 heading vs course 的差异含义</h3>
+        <p>在理想直线行驶时，heading ≈ course。两者差值（偏流角）有实际意义：</p>
+        <ul style="margin-top:8px">
+          <li><strong>|heading - course| &lt; 5°</strong>：正常行驶</li>
+          <li><strong>|heading - course| &gt; 10°</strong>：可能侧滑、强侧风、转弯过渡段</li>
+          <li><strong>|heading - course| &gt; 30°</strong>：异常，检查驾驶状态</li>
+        </ul>
+        <div class="alert info" style="margin-top:10px;padding:8px">
+          航向角 heading 需要双天线定向条件（fix_mode ∈ {1,2,3,4,5} 且 nav_mode=2），否则不可信。平台在条件不满足时自动屏蔽 heading 字段。
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 13 · 警戒线汇总 -->
+<div class="slide" id="s13">
+  <div class="eyebrow">10 / WARNING THRESHOLDS</div>
+  <h2>运输行业警戒线汇总</h2>
+  <div class="alert info" style="margin-bottom:16px">参考来源：JT/T 794《道路运输车辆卫星定位系统车载终端》、JT 293、JT/T 808、CGI-430 标称精度、平台工程经验值。<strong>以下为工程起始参考，不是法规统一阈值。</strong></div>
+  <table>
+    <tr><th>参数</th><th class="ok">正常参考</th><th>工程关注</th><th class="warn">行业警戒参考</th><th>极端危险</th></tr>
+    <tr>
+      <td><strong>速度 speed</strong></td>
+      <td class="ok">&lt; 60 km/h 城市</td>
+      <td>&gt; 60 km/h（非高速）</td>
+      <td class="warn">&gt; <strong>80 km/h</strong>（平台默认）</td>
+      <td>&gt; 120 km/h</td>
+    </tr>
+    <tr>
+      <td><strong>急加速</strong></td>
+      <td class="ok">&lt; 1.5 m/s²</td>
+      <td>&gt; 2 m/s²</td>
+      <td class="warn">&gt; <strong>3 m/s²</strong></td>
+      <td>&gt; 5 m/s²</td>
+    </tr>
+    <tr>
+      <td><strong>急制动</strong></td>
+      <td class="ok">&lt; 2 m/s²</td>
+      <td>&gt; 2.5 m/s²</td>
+      <td class="warn">&gt; <strong>3.5 m/s²</strong></td>
+      <td>&gt; 6 m/s²（ABS 上限）</td>
+    </tr>
+    <tr>
+      <td><strong>横滚 roll</strong></td>
+      <td class="ok">|roll| &lt; 6°</td>
+      <td>&gt; 10°</td>
+      <td class="warn">&gt; <strong>15°</strong></td>
+      <td>&gt; 25°（接近侧翻）</td>
+    </tr>
+    <tr>
+      <td><strong>俯仰 pitch</strong></td>
+      <td class="ok">|pitch| &lt; 5°</td>
+      <td>&gt; 8°</td>
+      <td class="warn">&gt; <strong>12°</strong></td>
+      <td>&gt; 20°（坡道超限）</td>
+    </tr>
+    <tr>
+      <td><strong>冲击 shock</strong></td>
+      <td class="ok">&lt; 0.3 g</td>
+      <td>&gt; 0.3 g</td>
+      <td class="warn">&gt; <strong>0.5 g</strong></td>
+      <td>&gt; 1.5 g（碰撞级）</td>
+    </tr>
+    <tr>
+      <td><strong>差分延迟 age</strong></td>
+      <td class="ok">&lt; 3 s</td>
+      <td>3–10 s</td>
+      <td class="warn">&gt; <strong>10 s</strong></td>
+      <td>持续 &gt; 30 s（完全失效）</td>
+    </tr>
+    <tr>
+      <td><strong>位置 σ</strong></td>
+      <td class="ok">&lt; 0.1 m（RTK）</td>
+      <td>0.5–2 m</td>
+      <td class="warn">&gt; <strong>2 m</strong></td>
+      <td>&gt; 10 m（完全不可信）</td>
+    </tr>
+    <tr>
+      <td><strong>卫星数</strong></td>
+      <td class="ok">≥ 10 颗</td>
+      <td>6–10 颗</td>
+      <td class="warn">&lt; <strong>6 颗</strong></td>
+      <td>&lt; 4 颗（无法定位）</td>
+    </tr>
+  </table>
+</div>
+
+<!-- SLIDE 14 · 静止基线与异常检测 -->
+<div class="slide" id="s14">
+  <div class="eyebrow">11 / STATIONARY BASELINE</div>
+  <h2>静止基线：理解"异常"的前提</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="card" style="margin-bottom:14px">
+        <h3>📌 为什么静止设备会有"运动数据"</h3>
+        <ul>
+          <li><strong>GNSS 位置漂移</strong>：卫星几何变化导致位置估计随机游走，可达数米</li>
+          <li><strong>速度残余</strong>：静止时速度不严格为零，通常有 0.1–0.5 m/s 噪声</li>
+          <li><strong>姿态微振</strong>：路面振动、风载、温度形变导致 pitch/roll 轻微波动</li>
+          <li><strong>陀螺零偏</strong>：即使静止，角速度仪表也有固定偏置</li>
+          <li><strong>比力偏置</strong>：加速度计有零偏和温漂</li>
+        </ul>
+      </div>
+      <div class="card warn">
+        <h3>⚠️ 读图警示</h3>
+        <p>静止期间显示的"速度"、"位移"、"角速度"都是<strong>噪声和漂移</strong>，不代表车辆真的在移动。</p>
+        <p style="margin-top:6px">平台通过"已确认静止"上下文，将这类数据标记并在轨迹地图上隐藏，在异常台账中归类为"静止残差"，不计入行驶里程。</p>
+      </div>
+    </div>
+    <div>
+      <div class="section-tag">MAD ROBUST BASELINE</div>
+      <div class="card gold" style="margin-bottom:14px">
+        <h3>🔬 平台如何建立静止基准</h3>
+        <p>用已知静止时段的数据，通过 <strong>MAD（中位绝对偏差）</strong> 方法拟合基准：</p>
+        <ol style="margin-top:8px;margin-left:16px">
+          <li>计算各字段的<strong>中位数</strong>作为参考中心（抵抗极值污染）</li>
+          <li>计算 MAD = median(|xi - 中位数|)</li>
+          <li>门槛 = max(工程底线, 6 × 1.4826 × MAD)</li>
+          <li>新到采样超出此门槛 → 标记为静止异常</li>
+        </ol>
+      </div>
+      <div class="card">
+        <h3>📋 静止期各字段典型噪声</h3>
+        <table style="font-size:12px">
+          <tr><th>字段</th><th>典型静止噪声</th><th>平台底线</th></tr>
+          <tr><td>位置半径</td><td>1–3 m (RTK)</td><td>≥ 10 m</td></tr>
+          <tr><td>速度 speed</td><td>0.05–0.2 m/s</td><td>≥ 0.3 m/s</td></tr>
+          <tr><td>角速度 g*</td><td>0.01–0.08 °/s</td><td>≥ 0.15 °/s</td></tr>
+          <tr><td>比力 a*</td><td>0.005–0.015 g</td><td>≥ 0.02 g</td></tr>
+          <tr><td>姿态 pitch/roll</td><td>0.1–0.3°</td><td>≥ 1°</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 15 · 读图指南 -->
+<div class="slide" id="s15">
+  <div class="eyebrow">12 / HOW TO READ CHARTS</div>
+  <h2>惯导图表读图指南</h2>
+  <div class="cols cols-3">
+    <div class="card">
+      <h3>🎨 颜色含义</h3>
+      <p><strong>深色粗线</strong>：均值（有效采样的平均值）</p>
+      <p><strong>浅色细线（包络）</strong>：min/max 峰值范围，展示变化幅度</p>
+      <p><strong>菱形散点</strong>：已触发的异常事件点位</p>
+      <p><strong>浅黄色背景区域</strong>：数据时间断档区间</p>
+      <hr>
+      <div class="alert warn" style="padding:8px">
+        <strong>空白 ≠ 零</strong>：字段被过滤时图表留空，不是补零，不是真实的零值。
+      </div>
+    </div>
+    <div class="card gold">
+      <h3>📏 时间分辨率</h3>
+      <table style="font-size:12px">
+        <tr><th>查询窗口</th><th>数据源</th></tr>
+        <tr><td>&lt; 6 小时</td><td>原始采样 ~10 Hz</td></tr>
+        <tr><td>6h – 2 天</td><td>60 秒聚合桶</td></tr>
+        <tr><td>&gt; 2 天</td><td>10 分钟聚合桶</td></tr>
+      </table>
+      <p style="margin-top:8px">长窗口图表均值是时段内有效采样的平均，短时冲击仍在 max 包络可见。点击事件菱形点可在地图上定位。</p>
+    </div>
+    <div class="card">
+      <h3>🔎 异常排查流程</h3>
+      <ol style="margin-left:16px">
+        <li>确认 nav_mode / fix_mode 状态是否正常</li>
+        <li>查看卫星数和差分延迟是否充足</li>
+        <li>检查异常时刻对应的位置标准差</li>
+        <li>对照速度剖面判断是否在行驶中</li>
+        <li>进入"数据质量"页查原值和过滤原因</li>
+        <li>点击"原始报文偏移"追溯到设备发出的字节</li>
+      </ol>
+    </div>
+  </div>
+  <div class="alert info" style="margin-top:16px">
+    <strong>最常见误区：</strong>看到角速度或加速度有非零值就认为设备在动。请先检查是否处于已确认静止状态，再判断数值是否属于设备正常噪声基准。
+  </div>
+</div>
+
+<!-- SLIDE 16 · 告警事件与参数对应 -->
+<div class="slide" id="s16">
+  <div class="eyebrow">13 / EVENTS MAP</div>
+  <h2>异常事件与惯导参数的对应关系</h2>
+  <table>
+    <tr><th>事件类型</th><th>直接关联参数</th><th>辅助验证参数</th><th>触发前提</th></tr>
+    <tr>
+      <td><strong>超速</strong></td>
+      <td>speed</td>
+      <td>lat_std, lon_std（质量门控）</td>
+      <td>nav_mode=2, valid_pos, 非静止区段</td>
+    </tr>
+    <tr>
+      <td><strong>急加速</strong></td>
+      <td>speed（相邻差值）</td>
+      <td>baseline speed, lat_std</td>
+      <td>同上 + 0.8-2.5s 窗口, 无位置跳变</td>
+    </tr>
+    <tr>
+      <td><strong>急制动</strong></td>
+      <td>speed（相邻差值，负向）</td>
+      <td>同上</td>
+      <td>同上</td>
+    </tr>
+    <tr>
+      <td><strong>横滚超限</strong></td>
+      <td>roll</td>
+      <td>roll_std, speed</td>
+      <td>安装已确认, speed &gt; 2 m/s</td>
+    </tr>
+    <tr>
+      <td><strong>俯仰超限</strong></td>
+      <td>pitch</td>
+      <td>pitch_std</td>
+      <td>安装已确认, speed &gt; 2 m/s</td>
+    </tr>
+    <tr>
+      <td><strong>冲击</strong></td>
+      <td>ax, ay, az（合矢量）</td>
+      <td>speed（需在运动中）</td>
+      <td>安装已确认, speed &gt; 2 m/s</td>
+    </tr>
+    <tr>
+      <td><strong>位置跳变</strong></td>
+      <td>lat, lon</td>
+      <td>lat_std, lon_std, speed</td>
+      <td>两点都有效定位, 非静止区段</td>
+    </tr>
+    <tr>
+      <td><strong>差分延迟</strong></td>
+      <td>age</td>
+      <td>sat1, fix_mode</td>
+      <td>age 字段存在（GPCHCX 专有）</td>
+    </tr>
+    <tr>
+      <td><strong>定位降级</strong></td>
+      <td>fix_mode</td>
+      <td>sat1, sat2</td>
+      <td>fix_mode ∉ {4, 8}（非 RTK 固定）</td>
+    </tr>
+    <tr>
+      <td><strong>位置不确定度</strong></td>
+      <td>lat_std, lon_std</td>
+      <td>alt_std, fix_mode</td>
+      <td>σ &gt; position_std_m 阈值</td>
+    </tr>
+  </table>
+</div>
+
+<!-- SLIDE 17 · 总结 -->
+<div class="slide cover" id="s17">
+  <div class="hero">
+    <div class="eyebrow">SUMMARY</div>
+    <h1>看懂这 28 个参数<br>就能<span>读懂</span>车辆运行状态</h1>
+  </div>
+  <div class="cols cols-3">
+    <div class="card">
+      <h3>🔑 三个优先级</h3>
+      <ol style="margin-left:16px">
+        <li>先看 <strong>nav_mode + fix_mode</strong>（状态决定可信度）</li>
+        <li>再看 <strong>sat + age + σ</strong>（质量指标）</li>
+        <li>最后看 <strong>姿态 + IMU + 速度</strong>（业务分析）</li>
+      </ol>
+    </div>
+    <div class="card gold">
+      <h3>⚠️ 三个常见误区</h3>
+      <ol style="margin-left:16px">
+        <li>静止非零值≠真实运动（噪声正常）</li>
+        <li>az≈1g不是异常（重力分量）</li>
+        <li>heading有值≠定向可信（看fix_mode）</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h3>📊 三种异常级别</h3>
+      <p><span class="pill">信息</span>定位质量降级、差分延迟，对业务影响低，记录观察</p>
+      <p style="margin-top:6px"><span class="pill warn">预警</span>超速/急加减速/横滚/俯仰/冲击，需现场核实</p>
+      <p style="margin-top:6px"><span class="pill gold">待复核</span>数值离群，原值保留，需人工判定</p>
+    </div>
+  </div>
+</div>
+
+</div><!-- /deck -->
+
+<div class="progress" id="progress"></div>
+<div class="nav">
+  <button onclick="go(-1)">← 上一页</button>
+  <span class="counter" id="counter">1 / 17</span>
+  <button onclick="go(1)">下一页 →</button>
+</div>
+
+<script>
+const total = 17;
+let cur = 1;
+function go(dir) {
+  const n = Math.max(1, Math.min(total, cur + dir));
+  if (n === cur) return;
+  document.getElementById('s' + cur).classList.remove('active');
+  cur = n;
+  document.getElementById('s' + cur).classList.add('active');
+  document.getElementById('counter').textContent = cur + ' / ' + total;
+  document.getElementById('progress').style.width = (cur / total * 100) + '%';
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown') go(1);
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') go(-1);
+});
+document.getElementById('progress').style.width = (1 / total * 100) + '%';
+</script>
+</body>
+</html>

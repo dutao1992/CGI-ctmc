@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CTMC CGI 车载数据服务 · 平台实现说明</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0e1f1a;font-family:'PingFang SC','Helvetica Neue',sans-serif;color:#e8f0e3;overflow:hidden;height:100vh}
+  .deck{position:relative;width:100vw;height:100vh}
+  .slide{position:absolute;inset:0;display:none;flex-direction:column;padding:56px 72px;opacity:0;transition:opacity .35s}
+  .slide.active{display:flex;opacity:1}
+  /* color palette */
+  :root{--g:#2e7d5c;--g2:#3d9b6e;--g3:#4db87f;--gold:#c48a36;--dim:#7a9870;--card:#162820;--border:#274035;--warn:#c8683a}
+  /* typography */
+  .eyebrow{font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--dim);margin-bottom:12px}
+  h1{font-size:48px;font-weight:700;line-height:1.15;color:#fff}
+  h1 span{color:var(--g3)}
+  h2{font-size:30px;font-weight:600;color:#d8ecd0;margin-bottom:20px}
+  h3{font-size:18px;font-weight:600;color:var(--g3);margin-bottom:10px}
+  p,li{font-size:15px;line-height:1.75;color:#b8d0b0}
+  li{margin-left:20px}
+  strong{color:#e8f0e3}
+  code{background:#1e3028;border:1px solid var(--border);border-radius:4px;padding:1px 6px;font-family:'JetBrains Mono','Courier New',monospace;font-size:13px;color:#7de0a8}
+  /* layout helpers */
+  .cols{display:grid;gap:24px;flex:1;align-content:start}
+  .cols-2{grid-template-columns:1fr 1fr}
+  .cols-3{grid-template-columns:1fr 1fr 1fr}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px;position:relative;overflow:hidden}
+  .card::before{content:'';position:absolute;top:0;left:0;width:3px;height:100%;background:var(--g2)}
+  .card.gold::before{background:var(--gold)}
+  .card.warn::before{background:var(--warn)}
+  .card h3{margin-top:0}
+  .pill{display:inline-block;background:#1e3a2a;border:1px solid var(--g);border-radius:20px;padding:3px 12px;font-size:12px;color:var(--g3);margin:3px}
+  .badge{display:inline-block;background:var(--g);border-radius:6px;padding:2px 10px;font-size:12px;font-weight:600;color:#fff;margin-right:8px}
+  .badge.gold{background:var(--gold)}
+  .badge.warn{background:var(--warn)}
+  /* flow diagram */
+  .flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0}
+  .flow-box{background:#1e3028;border:1px solid var(--g);border-radius:8px;padding:8px 14px;font-size:13px;color:#b8d0b0;text-align:center}
+  .flow-arrow{color:var(--g3);font-size:18px}
+  /* table */
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{background:#1a2e20;color:var(--dim);text-align:left;padding:8px 12px;font-weight:600;letter-spacing:.05em;border-bottom:2px solid var(--border)}
+  td{padding:8px 12px;border-bottom:1px solid var(--border);color:#b8d0b0;vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td strong{color:#e8f0e3}
+  /* cover */
+  .cover{justify-content:center}
+  .cover .hero{margin-bottom:48px}
+  .cover .subtitle{font-size:20px;color:var(--dim);margin-top:16px}
+  .cover .meta{margin-top:48px;display:flex;gap:32px}
+  .cover .meta span{font-size:13px;color:#5a7860}
+  .cover .mark{font-size:72px;font-weight:900;background:linear-gradient(135deg,var(--g3),var(--gold));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+  /* progress */
+  .progress{position:fixed;bottom:0;left:0;height:2px;background:linear-gradient(90deg,var(--g),var(--g3));transition:width .3s}
+  /* nav */
+  .nav{position:fixed;bottom:20px;right:28px;display:flex;gap:12px;align-items:center;z-index:99}
+  .nav button{background:var(--card);border:1px solid var(--border);border-radius:8px;color:#b8d0b0;padding:8px 18px;font-size:13px;cursor:pointer;transition:all .2s}
+  .nav button:hover{border-color:var(--g3);color:#fff}
+  .counter{font-size:12px;color:var(--dim)}
+  /* code block */
+  pre{background:#111e14;border:1px solid var(--border);border-radius:8px;padding:16px;font-size:12px;font-family:'JetBrains Mono','Courier New',monospace;color:#7de0a8;overflow:auto;line-height:1.6}
+  pre .c{color:var(--dim)}  pre .k{color:#f4c96e}  pre .s{color:#9fe0b4}
+  /* section tag */
+  .section-tag{background:var(--g);border-radius:6px;padding:2px 10px;font-size:11px;font-weight:700;letter-spacing:.1em;color:#fff;display:inline-block;margin-bottom:16px}
+  /* big number */
+  .stat{font-size:38px;font-weight:700;color:var(--g3);line-height:1}
+  .stat small{font-size:14px;color:var(--dim);display:block;margin-top:4px;font-weight:400}
+  /* divider */
+  hr{border:none;border-top:1px solid var(--border);margin:20px 0}
+  /* gap note */
+  .gap-note{font-size:12px;color:#5a7860;margin-top:6px}
+</style>
+</head>
+<body>
+<div class="deck">
+
+<!-- ═══ SLIDE 1 · COVER ═══ -->
+<div class="slide cover active" id="s1">
+  <div class="hero">
+    <div class="mark">CGI</div>
+    <h1>车载数据服务平台<span>.</span><br>实现全景</h1>
+    <p class="subtitle">从原始 TCP 报文到可信的惯导分析与事件台账</p>
+  </div>
+  <div class="meta">
+    <span>协议 · CHC CGI-430 GPCHCX V2.4.4</span>
+    <span>后端 · Python 3.11 / SQLite WAL</span>
+    <span>前端 · Leaflet + ECharts</span>
+    <span>版本 · 质量过滤 v2 · 聚合 v202</span>
+  </div>
+</div>
+
+<!-- ═══ SLIDE 2 · 整体架构 ═══ -->
+<div class="slide" id="s2">
+  <div class="eyebrow">01 / ARCHITECTURE</div>
+  <h2>整体架构：最小侵入式接入</h2>
+  <div class="flow" style="margin:24px 0 32px">
+    <div class="flow-box">CGI-430<br><small>设备</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box">原有 TCP<br>:9000</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box">原始 .log<br>（只读游标）</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box" style="border-color:var(--gold)">新服务 :8790<br>（回环监听）</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box">独立 SQLite<br>WAL 数据库</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box" style="border-color:var(--g3)">nginx 反代<br>/vehicle/</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box">浏览器<br>平台账号</div>
+  </div>
+  <div class="cols cols-3">
+    <div class="card">
+      <h3>🔒 原有服务零改动</h3>
+      <p>新服务以只读游标增量读取原有日志文件，不触碰原 TCP 服务、不改变日志格式。设备无感知。</p>
+    </div>
+    <div class="card gold">
+      <h3>🗄️ 独立数据库</h3>
+      <p>独立 SQLite（WAL 模式）隔离车载数据与质检主库，崩溃不影响其余业务。随时可重建。</p>
+    </div>
+    <div class="card">
+      <h3>🔑 平台统一认证</h3>
+      <p>通过回环调用 <code>/auth/me</code> 复用现有会话，无独立账号体系，管理员显式授权 vehicle 权限。</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SLIDE 3 · 协议解析 ═══ -->
+<div class="slide" id="s3">
+  <div class="eyebrow">02 / PROTOCOL</div>
+  <h2>协议解析：GPCHCX 46 字段严格校验</h2>
+  <div class="cols cols-2" style="gap:32px;flex:1">
+    <div>
+      <div class="section-tag">FRAME MATCHING</div>
+      <pre><code><span class="c"># 正则匹配：$ 或 # 开头，*校验和结尾</span>
+FRAME = re.compile(
+  rb'([$#][A-Z][A-Z0-9]+,[\x20-\x7e]{1,4096}?'
+  rb'\*[0-9a-fA-F]{2,8})\r?\n'
+)
+
+<span class="c"># 双校验：XOR（GPCHC/GPCHCX）</span>
+<span class="c">#        CRC-32（#AGRICA 二进制）</span>
+<span class="k">def</span> checksum(frame):
+    <span class="k">if</span> frame[:1] == b<span class="s">'$'</span>:
+        value = <span class="k">0</span>
+        <span class="k">for</span> byte <span class="k">in</span> body: value ^= byte
+        <span class="k">return</span> value == int(check, <span class="k">16</span>)</code></pre>
+      <div class="section-tag" style="margin-top:20px">TIME CONVERSION</div>
+      <pre><code><span class="c"># GPS 周 + 周秒 → UTC → 北京时间</span>
+GPS_EPOCH = 1980-01-06T00:00:00Z
+offset = 18  <span class="c"># 闰秒（2017年后固定）</span>
+t = GPS_EPOCH + week×604800 + tow - offset</code></pre>
+    </div>
+    <div>
+      <div class="section-tag">46 FIELDS · GPCHCX</div>
+      <table>
+        <tr><th>字段组</th><th>内容</th><th>数量</th></tr>
+        <tr><td>基础组</td><td>航向/俯仰/横滚/角速度/比力/位置/速度/卫星数</td><td>18</td></tr>
+        <tr><td>差分延迟</td><td>age（GNSS 差分龄期）</td><td>1</td></tr>
+        <tr><td>扩展精度</td><td>位置/速度/姿态 6σ 标准差</td><td>9</td></tr>
+        <tr><td>扩展导航</td><td>航迹角/杆臂/安装角/可见卫星</td><td>11</td></tr>
+        <tr><td>状态字节</td><td>定位模式 + 导航模式（各4bit）</td><td>1</td></tr>
+        <tr><td>告警码</td><td>16bit 位域，天线/温度/CPU 等</td><td>1</td></tr>
+        <tr><td>序列号</td><td>设备 SN，逻辑身份锚点</td><td>1</td></tr>
+      </table>
+      <div style="margin-top:16px">
+        <p><span class="pill">WGS84 坐标</span><span class="pill">°/s 角速度</span><span class="pill">g 比力</span><span class="pill">m/s 速度</span></p>
+        <p class="gap-note" style="margin-top:10px">范围硬约束：lat ∈ [-90,90]，lon ∈ [-180,180]，heading ∈ [0,360)，speed ∈ [0,300] m/s</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SLIDE 4 · 数据入库 ═══ -->
+<div class="slide" id="s4">
+  <div class="eyebrow">03 / INGESTION</div>
+  <h2>数据入库：游标增量扫描</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="section-tag">SCAN LOOP</div>
+      <p>每 <strong>10 秒</strong>扫描原始日志目录，游标记录已读字节偏移。断线重连、历史补录均自动追赶。</p>
+      <hr>
+      <h3>入库流水线（每条报文）</h3>
+      <div class="flow" style="flex-direction:column;align-items:flex-start;gap:10px">
+        <div class="flow-box" style="width:100%">① FRAME 正则 → checksum 校验</div>
+        <div class="flow-box" style="width:100%">② parse() → 46 字段解码 + 范围检查</div>
+        <div class="flow-box" style="width:100%">③ INSERT OR IGNORE → points 表（主键去重）</div>
+        <div class="flow-box" style="width:100%">④ write_assessment() → point_quality 表</div>
+        <div class="flow-box" style="width:100%">⑤ rebuild_rollup_buckets() → 60s/600s 聚合</div>
+        <div class="flow-box" style="width:100%">⑥ 更新 devices 表元数据 + 清除查询缓存</div>
+      </div>
+    </div>
+    <div>
+      <div class="section-tag">KEY DESIGN DECISIONS</div>
+      <div class="card" style="margin-bottom:16px">
+        <h3>SN 即身份</h3>
+        <p>设备 SN 作为主键，公网 IP 变化不拆分设备。GPCHCX 字段内携带 SN；GPCHC 需预绑定（当前未接入）。</p>
+      </div>
+      <div class="card gold" style="margin-bottom:16px">
+        <h3>时间戳去重</h3>
+        <p>主键 <code>(device_id, t, protocol)</code>，同一时刻同一设备同一协议只保留一条，防止日志文件轮转重复读。</p>
+      </div>
+      <div class="card warn">
+        <h3>时钟过滤</h3>
+        <p>拒绝 t > now+300s 或 t < 2010-01-01 的报文，防设备时钟异常污染数据库。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SLIDE 5 · 数据库设计 ═══ -->
+<div class="slide" id="s5">
+  <div class="eyebrow">04 / DATABASE</div>
+  <h2>数据库设计：SQLite WAL 五表结构</h2>
+  <table style="margin-bottom:24px">
+    <tr><th>表名</th><th>主键</th><th>核心用途</th><th>关键列</th></tr>
+    <tr>
+      <td><strong>points</strong></td>
+      <td><code>(device_id, t, protocol)</code></td>
+      <td>原始采样，永不修改</td>
+      <td>46 个数值字段 + source_offset（原报文字节位置）</td>
+    </tr>
+    <tr>
+      <td><strong>point_quality</strong></td>
+      <td><code>(device_id, t, protocol)</code></td>
+      <td>版本化质量标记</td>
+      <td>version, mask（字段位域）, reasons（原因位域）</td>
+    </tr>
+    <tr>
+      <td><strong>point_rollups</strong></td>
+      <td><code>(device_id, bucket_s, bucket_start)</code></td>
+      <td>60s/600s 预聚合</td>
+      <td>JSON payload（min/max/sum/count + 轨迹快照）</td>
+    </tr>
+    <tr>
+      <td><strong>events</strong></td>
+      <td>自增 id</td>
+      <td>异常事件台账</td>
+      <td>kind, start/end/peak, rule_version, status, note</td>
+    </tr>
+    <tr>
+      <td><strong>quality_contexts</strong></td>
+      <td>SHA256[:20] 内容哈希</td>
+      <td>静止区段元数据</td>
+      <td>start/end, kind, profile（JSON），不可覆盖</td>
+    </tr>
+  </table>
+  <div class="cols cols-2">
+    <div class="card">
+      <h3>📐 关联查询（JOIN 视图）</h3>
+      <pre style="font-size:11px"><code>SELECT p.*, q.version, q.mask, q.reasons
+FROM points p
+LEFT JOIN point_quality q
+  ON q.device_id=p.device_id
+  AND q.t=p.t
+  AND q.protocol=p.protocol</code></pre>
+    </div>
+    <div class="card gold">
+      <h3>💾 磁盘管理</h3>
+      <p>每小时检查磁盘占用：超 <strong>80%</strong> 按旧到新清理原始日志及关联采样/聚合，降至 <strong>75%</strong>，保护最近 24 小时。</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SLIDE 6 · 质量过滤框架 ═══ -->
+<div class="slide" id="s6">
+  <div class="eyebrow">05 / QUALITY FILTER</div>
+  <h2>质量过滤框架：版本化可逆隔离</h2>
+  <div class="cols cols-3" style="margin-bottom:20px">
+    <div class="card">
+      <div class="badge">原则1</div>
+      <h3>不修改原值</h3>
+      <p><code>points</code> 表永远保存接收到的原始解码值；<code>point_quality</code> 存储字段级 mask 位域，两表分离。</p>
+    </div>
+    <div class="card gold">
+      <div class="badge gold">原则2</div>
+      <h3>按字段隔离</h3>
+      <p>同一采样中 lat/lon 异常不影响 IMU 字段；位置过滤不清零角速度。各字段独立开关。</p>
+    </div>
+    <div class="card warn">
+      <div class="badge warn">原则3</div>
+      <h3>版本化决策</h3>
+      <p>过滤 <code>VERSION=2</code> 写入 <code>point_quality.version</code>；版本不匹配时前端明确提示，聚合显示为"待判定"。</p>
+    </div>
+  </div>
+  <h3 style="margin-bottom:12px">过滤原因分类（共 12 种）</h3>
+  <div class="cols cols-2">
+    <div>
+      <p><span class="badge warn">不可用 (unavailable)</span></p>
+      <ul>
+        <li><strong>invalid_navigation</strong>：导航初始化中 / nav_mode=0</li>
+        <li><strong>heading_unavailable</strong>：定向未就绪（fix_mode 不支持）</li>
+        <li><strong>course_unavailable</strong>：静止或低速时航迹角无意义</li>
+      </ul>
+    </div>
+    <div>
+      <p><span class="badge">离群 (anomaly)</span></p>
+      <ul>
+        <li><strong>stationary_position</strong>：静止期位置偏离锚点 >15m</li>
+        <li><strong>stationary_velocity</strong>：静止期水平速度 >0.3 m/s</li>
+        <li><strong>stationary_gyro/accel/attitude</strong>：静止期 IMU 离群</li>
+        <li><strong>position/altitude_uncertainty</strong>：标准差超限</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SLIDE 7 · 静止过滤算法 ═══ -->
+<div class="slide" id="s7">
+  <div class="eyebrow">06 / STATIONARY FILTER</div>
+  <h2>静止过滤算法：MAD 稳健统计</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="section-tag">PROFILE FITTING</div>
+      <p style="margin-bottom:12px">用一段已知静止时段拟合设备的"正常静止基线"：</p>
+      <pre><code><span class="c"># 1. 中位数作锚点（抵抗 GNSS 漂移极值）</span>
+center = median(values)
+
+<span class="c"># 2. MAD = 中位绝对偏差（稳健 σ 估计）</span>
+mad = median(|x_i - center|)
+
+<span class="c"># 3. 门槛 = max(工程底线, 6×1.4826×MAD)</span>
+limit = max(floor, 6 × 1.4826 × mad)
+<span class="c"># 1.4826 = 正态分布下 MAD → σ 的换算系数</span>
+<span class="c"># 6σ ≈ 99.9997% 置信区间</span></code></pre>
+      <hr>
+      <h3>工程噪声底线（防止过拟合）</h3>
+      <table style="font-size:12px">
+        <tr><th>字段</th><th>底线</th><th>字段</th><th>底线</th></tr>
+        <tr><td>位置半径</td><td>10 m</td><td>速度</td><td>0.3 m/s</td></tr>
+        <tr><td>高程</td><td>10 m</td><td>角速度</td><td>0.15 °/s</td></tr>
+        <tr><td>比力</td><td>0.02 g</td><td>姿态</td><td>1°</td></tr>
+      </table>
+    </div>
+    <div>
+      <div class="section-tag">ACTIVE CONTEXT CAPS</div>
+      <p style="margin-bottom:12px">转为"持续静止"后，额外加盖上限防漂移训练：</p>
+      <div class="card warn" style="margin-bottom:12px">
+        <h3>⚠️ 硬上限约束</h3>
+        <ul>
+          <li>位置半径：≤ <strong>15 m</strong></li>
+          <li>高程偏差：≤ <strong>15 m</strong></li>
+          <li>位置标准差：≤ <strong>5 m</strong></li>
+          <li>高程标准差：≤ <strong>8 m</strong></li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>📋 上下文不可篡改</h3>
+        <p>已冻结的 <code>quality_contexts</code> 记录以内容哈希（SHA256[:20]）为主键，不可覆盖、不可追溯修改。关闭需要填写原因，写审计日志。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SLIDE 8 · 聚合算法 ═══ -->
+<div class="slide" id="s8">
+  <div class="eyebrow">07 / AGGREGATION</div>
+  <h2>聚合算法：分层等时桶 + 峰值保护</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="section-tag">TWO-LEVEL ROLLUP</div>
+      <table style="margin-bottom:16px">
+        <tr><th>层级</th><th>分辨率</th><th>适用窗口</th><th>数据源</th></tr>
+        <tr><td>原始</td><td>~10 Hz</td><td>&lt; 6 小时</td><td>points 表直读</td></tr>
+        <tr><td>一级</td><td>60 秒</td><td>6h – 2 天</td><td>RollupBuilder</td></tr>
+        <tr><td>二级</td><td>10 分钟</td><td>&gt; 2 天</td><td>QueryCombiner 合并一级</td></tr>
+      </table>
+      <div class="section-tag">BUCKET CONTENT</div>
+      <p>每个时间桶存储（以 JSON 形式）：</p>
+      <ul style="margin-top:8px">
+        <li>每个指标的 <strong>min / max / sum / count / last</strong></li>
+        <li>首末采样快照（first/last endpoint）</li>
+        <li>轨迹点压缩数组（首末 + 关键节点）</li>
+        <li>行程区段列表（moving/stopped/stationary）</li>
+        <li>时间断档列表（gaps）</li>
+        <li>质量分组统计（version, mask, reasons, count）</li>
+      </ul>
+    </div>
+    <div>
+      <div class="section-tag">ANOMALY PRESERVATION</div>
+      <div class="card" style="margin-bottom:12px">
+        <h3>✅ 峰值不丢失</h3>
+        <p>min/max 随点累计，60 秒内的单点冲击体现在桶的 max 上。前端同时绘制均值曲线 + min/max 包络带。</p>
+      </div>
+      <div class="card gold" style="margin-bottom:12px">
+        <h3>✅ 过滤先于聚合</h3>
+        <p><code>project()</code> 在每条点被 <code>RollupBuilder.add()</code> 前调用；被 mask 的字段跳过，不进入均值，也不污染 min/max。</p>
+      </div>
+      <div class="card">
+        <h3>✅ 事件独立于聚合</h3>
+        <p>事件检测在逐条原始采样层面运行（实时：入库时；离线：逐行 CSV），与聚合路径完全分离。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SLIDE 9 · 业务规则引擎 ═══ -->
+<div class="slide" id="s9">
+  <div class="eyebrow">08 / RULES ENGINE</div>
+  <h2>业务规则引擎：逐点触发 + 持续时长合并</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="section-tag">EVENT CONDITIONS · rules.py</div>
+      <table>
+        <tr><th>事件类型</th><th>触发条件</th><th>默认阈值</th></tr>
+        <tr><td>超速</td><td>speed × 3.6 &gt; threshold<br>且 nav_mode=2、定位有效</td><td>80 km/h</td></tr>
+        <tr><td>急加速</td><td>(v_now − v_base) / Δt &gt; threshold<br>Δt ∈ [0.8, 2.5] 秒</td><td>3 m/s²</td></tr>
+        <tr><td>急减速</td><td>同上，负值</td><td>3.5 m/s²</td></tr>
+        <tr><td>横滚</td><td>|roll| &gt; threshold（须安装确认）</td><td>15°</td></tr>
+        <tr><td>俯仰</td><td>|pitch| &gt; threshold（须安装确认）</td><td>12°</td></tr>
+        <tr><td>冲击</td><td>|√(ax²+ay²+az²) − 1| &gt; threshold</td><td>0.5 g</td></tr>
+        <tr><td>位置跳变</td><td>jump > (speed+15)×Δt + tolerance</td><td>20 m + 5σ</td></tr>
+        <tr><td>差分延迟</td><td>age &gt; threshold</td><td>10 s</td></tr>
+        <tr><td>数据断档</td><td>Δt &gt; gap_s</td><td>3 s</td></tr>
+      </table>
+    </div>
+    <div>
+      <div class="section-tag">STATE MACHINE</div>
+      <div class="card" style="margin-bottom:12px">
+        <h3>⏱️ 持续时长合并（dwell）</h3>
+        <p>超速/姿态等事件须持续 <code>dwell_s</code> 秒后才生成记录；冲击事件 0.1 s 即触发（单次冲击不应被忽略）。</p>
+      </div>
+      <div class="card gold" style="margin-bottom:12px">
+        <h3>🔄 连续事件延伸</h3>
+        <p>同类事件间隔 &lt; <code>gap_s</code> 时延伸同一条记录（更新 end/peak/samples），不新建重复事件。</p>
+      </div>
+      <div class="card">
+        <h3>📦 规则版本号</h3>
+        <p>每次修改规则，<code>rules.version</code> 自增。历史事件保留当时版本，不会因规则调整而追溯修改。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SLIDE 10 · 查询接口 ═══ -->
+<div class="slide" id="s10">
+  <div class="eyebrow">09 / QUERY API</div>
+  <h2>查询接口设计</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="section-tag">MAIN ENDPOINTS</div>
+      <table>
+        <tr><th>路由</th><th>功能</th></tr>
+        <tr><td><code>GET /api/devices</code></td><td>设备列表 + 最新状态</td></tr>
+        <tr><td><code>GET /api/query</code></td><td>时间范围查询（图表+轨迹+事件）</td></tr>
+        <tr><td><code>GET /api/events</code></td><td>事件列表（支持质量门槛过滤）</td></tr>
+        <tr><td><code>GET /api/quality</code></td><td>质量摘要（异常/不可用/待判定）</td></tr>
+        <tr><td><code>GET /api/quality/records</code></td><td>异常台账（原值 + 过滤决策）</td></tr>
+        <tr><td><code>GET /api/point</code></td><td>单点证据（原值 + 原报文偏移）</td></tr>
+        <tr><td><code>GET /api/export</code></td><td>有效数据 CSV（≤10万行）</td></tr>
+        <tr><td><code>POST /api/device</code></td><td>更新规则/档案（管理员）</td></tr>
+        <tr><td><code>POST /api/event/review</code></td><td>事件处置（管理员）</td></tr>
+        <tr><td><code>POST /api/offline</code></td><td>CSV 离线解析（非持久）</td></tr>
+      </table>
+    </div>
+    <div>
+      <div class="section-tag">QUERY STRATEGY</div>
+      <div class="card" style="margin-bottom:12px">
+        <h3>🧠 智能分辨率选择</h3>
+        <p>窗口 &lt;6h → 原始；6h-2d → 60s 聚合；&gt;2d → 10min 聚合。首尾不整齐桶回退原始，保证边界精度。</p>
+      </div>
+      <div class="card gold" style="margin-bottom:12px">
+        <h3>⚡ 内存查询缓存</h3>
+        <p>最多缓存 16 个查询结果（OrderedDict LRU），近实时数据 10s TTL，历史数据 60s TTL。版本号变更时立即失效。</p>
+      </div>
+      <div class="card">
+        <h3>🛡️ 并发保护</h3>
+        <p>查询槽位 <code>BoundedSemaphore(2)</code>，防止长时间范围查询耗尽连接。聚合索引未就绪时拒绝 &gt;100万条原始回退。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SLIDE 11 · 前端架构 ═══ -->
+<div class="slide" id="s11">
+  <div class="eyebrow">10 / FRONTEND</div>
+  <h2>前端架构：单页无框架 + 静态锁版</h2>
+  <div class="cols cols-3" style="margin-bottom:20px">
+    <div class="card">
+      <h3>📦 依赖锁版</h3>
+      <p>Leaflet 1.9.4 + ECharts 5.6.0 + coordtransform 静态本地化，许可证保存在 <code>/vendor/</code>，离网可用。</p>
+    </div>
+    <div class="card gold">
+      <h3>🔒 安全头</h3>
+      <p>每个响应携带完整 CSP，仅白名单高德域名（4个 webrd0x），禁止 frame-ancestors 外部嵌入，X-Content-Type-Options nosniff。</p>
+    </div>
+    <div class="card">
+      <h3>🗜️ 传输压缩</h3>
+      <p>JSON 响应 ≥1024 字节时自动 gzip（level 4），图表数据最多可压缩至原始大小 10–15%。</p>
+    </div>
+  </div>
+  <div class="section-tag">6 个功能视图</div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:12px">
+    <div class="flow-box"><strong>01</strong><br>运行总览<br><small>地图轨迹+速度剖面</small></div>
+    <div class="flow-arrow">·</div>
+    <div class="flow-box"><strong>02</strong><br>惯导分析<br><small>12 组 ECharts 图表</small></div>
+    <div class="flow-arrow">·</div>
+    <div class="flow-box"><strong>03</strong><br>异常事件<br><small>台账+处置+定位</small></div>
+    <div class="flow-arrow">·</div>
+    <div class="flow-box"><strong>04</strong><br>设备与规则<br><small>档案+阈值配置</small></div>
+    <div class="flow-arrow">·</div>
+    <div class="flow-box"><strong>05</strong><br>数据质量<br><small>原值台账+原报文追溯</small></div>
+    <div class="flow-arrow">·</div>
+    <div class="flow-box"><strong>06</strong><br>离线解析<br><small>CSV上传+重建分析</small></div>
+  </div>
+</div>
+
+<!-- ═══ SLIDE 12 · 地图实现 ═══ -->
+<div class="slide" id="s12">
+  <div class="eyebrow">11 / MAP</div>
+  <h2>地图实现：WGS84 存储 + GCJ-02 展示</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="section-tag">COORDINATE STRATEGY</div>
+      <div class="card" style="margin-bottom:12px">
+        <h3>🗺️ 双坐标体系</h3>
+        <p>数据库和导出 CSV 保留 <strong>WGS84 原始坐标</strong>（GNSS 设备输出）。前端 Leaflet 地图叠加到高德底图时，通过 <code>coordtransform.js</code> 转为 <strong>GCJ-02</strong> 展示，不影响计算和导出。</p>
+      </div>
+      <div class="card gold" style="margin-bottom:12px">
+        <h3>📍 静止区段锚点</h3>
+        <p>已确认静止区段的点在地图上显示为<strong>统计锚点坐标</strong>（中位数位置），不绘制定位漂移轨迹，避免误导。</p>
+      </div>
+      <div class="card">
+        <h3>▶ 轨迹回放</h3>
+        <p>时间滑块（range input）驱动二分查找最近轨迹点；回放速度 1×/10×/50×/200× 可选；断档/静止自动断线。</p>
+      </div>
+    </div>
+    <div>
+      <div class="section-tag">TRACK RENDERING</div>
+      <pre style="font-size:11px"><code><span class="c">// 轨迹点压缩：每桶保留首+尾</span>
+<span class="c">// break_before 标记断线点</span>
+<span class="k">for</span> (const p of points) {
+  <span class="k">if</span> (p.break_before || p.stationary_context)
+    flush();   <span class="c">// 断线，开新段</span>
+  <span class="k">if</span> (!p.stationary_context)
+    line.push(mapLatLng(p));
+}
+flush();</code></pre>
+      <div style="margin-top:16px">
+        <p><span class="pill">轨迹最多 10,000 点</span></p>
+        <p><span class="pill">事件标记最多 150 个</span></p>
+        <p><span class="pill">OpenStreetMap / 高德底图</span></p>
+        <p><span class="pill">Canvas 渲染（preferCanvas）</span></p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SLIDE 13 · 图表实现 ═══ -->
+<div class="slide" id="s13">
+  <div class="eyebrow">12 / CHARTS</div>
+  <h2>惯导图表实现：12 组 ECharts 时序图</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="section-tag">12 SIGNAL GROUPS</div>
+      <table style="font-size:12px">
+        <tr><th>#</th><th>图表名称</th><th>字段</th></tr>
+        <tr><td>01</td><td>姿态角</td><td>heading / pitch / roll</td></tr>
+        <tr><td>02</td><td>三轴角速度</td><td>gx / gy / gz（°/s）</td></tr>
+        <tr><td>03</td><td>三轴加速度/比力</td><td>ax / ay / az（g，含重力）</td></tr>
+        <tr><td>04</td><td>东/北/天向速度</td><td>ve / vn / vu（m/s）</td></tr>
+        <tr><td>05</td><td>位置标准差</td><td>lat_std / lon_std / alt_std</td></tr>
+        <tr><td>06</td><td>姿态标准差</td><td>heading_std / pitch_std / roll_std</td></tr>
+        <tr><td>07</td><td>车辆平面速度</td><td>speed（km/h）</td></tr>
+        <tr><td>08</td><td>高程</td><td>alt（m）</td></tr>
+        <tr><td>09</td><td>使用卫星数</td><td>sat1 / sat2</td></tr>
+        <tr><td>10</td><td>差分延迟</td><td>age（s）</td></tr>
+        <tr><td>11</td><td>速度标准差</td><td>ve_std / vn_std / vu_std</td></tr>
+        <tr><td>12</td><td>航迹角与标准差</td><td>course / course_std</td></tr>
+      </table>
+    </div>
+    <div>
+      <div class="section-tag">RENDERING STRATEGY</div>
+      <div class="card" style="margin-bottom:12px">
+        <h3>📊 均值 + 峰值包络</h3>
+        <p>深色粗线：均值（或 heading/course 取 last）。浅色细线：min/max 包络（opacity 0.3）。视觉上既看趋势又看异常。</p>
+      </div>
+      <div class="card gold" style="margin-bottom:12px">
+        <h3>🔶 事件标记叠加</h3>
+        <p>超速/急加减速/横滚/俯仰/冲击事件在对应图表上绘制菱形散点（<code>scatter</code> series），点击可定位事件处置。</p>
+      </div>
+      <div class="card">
+        <h3>⚡ 渐进渲染</h3>
+        <p>ECharts <code>progressive: 2000, progressiveThreshold: 3000</code>，长时间窗口大数据量分批渲染，不阻塞交互。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SLIDE 14 · 离线解析 ═══ -->
+<div class="slide" id="s14">
+  <div class="eyebrow">13 / OFFLINE</div>
+  <h2>离线 CSV 解析模块</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="section-tag">DESIGN INTENT</div>
+      <p style="margin-bottom:16px">将平台"导出有效数据"的 CSV 文件重新投入，在 <strong>不进入实时数据库</strong>的前提下，完整重建轨迹、图表与事件候选。</p>
+      <h3>两阶段解析</h3>
+      <div class="flow" style="flex-direction:column;align-items:flex-start;gap:10px;margin-top:10px">
+        <div class="flow-box" style="width:100%"><strong>第一遍（_first_pass）</strong>：仅读取 device_id / t，验证设备唯一性、时间顺序和跨度 ≤31天</div>
+        <div class="flow-box" style="width:100%"><strong>第二遍</strong>：完整解析 46 字段，逐行复核 filter_version、excluded_fields、GPS 时间一致性</div>
+      </div>
+    </div>
+    <div>
+      <div class="section-tag">LIMITS</div>
+      <table>
+        <tr><th>限制项</th><th>值</th><th>原因</th></tr>
+        <tr><td>文件大小</td><td>64 MiB</td><td>防止服务器内存耗尽</td></tr>
+        <tr><td>行数</td><td>10 万行</td><td>与在线导出口径一致</td></tr>
+        <tr><td>时间跨度</td><td>31 天</td><td>与在线查询保持一致</td></tr>
+        <tr><td>设备数</td><td>1 台</td><td>单文件单设备，防混淆</td></tr>
+        <tr><td>filter_version</td><td>必须 = 当前 v2</td><td>口径不一致时拒绝</td></tr>
+      </table>
+      <div class="card gold" style="margin-top:16px">
+        <h3>🔄 规则复用</h3>
+        <p>自动查询同 SN 设备的当前规则（<code>rule_resolver</code>），若找不到则用默认工程规则。可手动指定安装确认状态。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SLIDE 15 · 部署与运维 ═══ -->
+<div class="slide" id="s15">
+  <div class="eyebrow">14 / DEPLOYMENT</div>
+  <h2>部署与运维</h2>
+  <div class="cols cols-3">
+    <div class="card">
+      <h3>🚀 systemd 服务</h3>
+      <p>两个 unit：<code>ctmc-vehicle.service</code>（主服务）和 <code>ctmc-vehicle-retention.timer</code>（每小时磁盘检查）。均配置 Restart=on-failure。</p>
+    </div>
+    <div class="card gold">
+      <h3>🔑 静止过滤部署</h3>
+      <p>管理员通过 <code>quality.py --fit-device</code> 拟合 JSON 配置，<code>--context</code> 导入，<code>--backfill</code> 重算历史，<code>--active</code> 开启持续静止。</p>
+    </div>
+    <div class="card">
+      <h3>🔄 聚合重建</h3>
+      <p>质量版本升级后自动触发 <code>rebuild_rollups()</code>，全量重算所有桶。期间查询回退原始采样（≤100万行时安全）。</p>
+    </div>
+  </div>
+  <div class="cols cols-2" style="margin-top:20px">
+    <div class="card">
+      <h3>📊 容量规划（单设备 10 Hz）</h3>
+      <table style="font-size:12px">
+        <tr><th>时长</th><th>原始采样</th><th>60s 桶</th><th>10min 桶</th></tr>
+        <tr><td>1 天</td><td>~86.4 万</td><td>1,440</td><td>144</td></tr>
+        <tr><td>10 天</td><td>~864 万</td><td>14,400</td><td>1,440</td></tr>
+        <tr><td>31 天</td><td>~2.7 亿</td><td>44,640</td><td>4,464</td></tr>
+      </table>
+    </div>
+    <div class="card gold">
+      <h3>🔍 可观测性</h3>
+      <p><code>GET /api/health</code> 返回心跳时间、ingestion 计数器、pending 字节、磁盘占用、聚合状态（各层桶数/点数/是否就绪）。</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SLIDE 16 · 测试覆盖 ═══ -->
+<div class="slide" id="s16">
+  <div class="eyebrow">15 / TESTING</div>
+  <h2>测试覆盖</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="section-tag">TEST STRUCTURE · tests/</div>
+      <ul style="margin-top:12px">
+        <li><strong>真实报文测试</strong>：用设备实际采集的 GPCHCX 帧验证解码、校验和、时间转换</li>
+        <li><strong>合成边界测试</strong>：lat/lon 越界、非有限值、字段数错误、校验和错误</li>
+        <li><strong>质量评估测试</strong>：静止过滤各原因的触发与不触发场景</li>
+        <li><strong>聚合测试</strong>：RollupBuilder / QueryCombiner 的 min/max/count 一致性</li>
+        <li><strong>离线解析测试</strong>：CSV 格式校验、版本不一致、多设备混入</li>
+      </ul>
+      <hr style="margin:16px 0">
+      <pre style="font-size:12px"><code><span class="c"># 运行全套测试</span>
+python3 -m unittest discover -s tests -v
+
+<span class="c"># 前端 JS 语法检查</span>
+node --check static/app.js</code></pre>
+    </div>
+    <div>
+      <div class="section-tag">KNOWN LIMITS &amp; BOUNDARIES</div>
+      <div class="card warn" style="margin-bottom:12px">
+        <h3>⚠️ 法规边界</h3>
+        <ul>
+          <li>不是 JT/T 808 终端</li>
+          <li>不宣称通过 JT/T 796 认证</li>
+          <li>超速判断基于业务阈值，非真实道路限速</li>
+          <li>无 ISO 2631 频率加权，不输出振动舒适度等级</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>📡 当前接入状态</h3>
+        <ul>
+          <li>接入设备：1 台（SN: 6094510，GPCHCX）</li>
+          <li>采样频率：~10 Hz</li>
+          <li>安装状态：原地静止，已配置静止过滤</li>
+          <li>地图瓦片：OSM 公开服务 + 高德</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SLIDE 17 · 数据流全景 ═══ -->
+<div class="slide" id="s17">
+  <div class="eyebrow">16 / DATA FLOW OVERVIEW</div>
+  <h2>端到端数据流全景</h2>
+  <div style="display:grid;grid-template-columns:1fr;gap:16px;flex:1">
+    <div class="flow" style="justify-content:center;gap:6px;flex-wrap:nowrap">
+      <div class="flow-box" style="background:#0d1e14">CGI-430<br>设备输出</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box">TCP 收集<br>→ .log 文件</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box" style="border-color:#c48a36">游标增量<br>读取</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box">协议解析<br>parse()</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box">points 表<br>（原值）</div>
+    </div>
+    <div style="text-align:center;color:var(--g3);font-size:20px">↓</div>
+    <div class="flow" style="justify-content:center;gap:6px;flex-wrap:nowrap">
+      <div class="flow-box">write_assessment<br>point_quality</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box">project()<br>按字段隔离</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box" style="border-color:#c48a36">conditions()<br>规则触发</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box">events 表<br>台账</div>
+      <div class="flow-arrow">+</div>
+      <div class="flow-box">RollupBuilder<br>min/max/mean</div>
+    </div>
+    <div style="text-align:center;color:var(--g3);font-size:20px">↓</div>
+    <div class="flow" style="justify-content:center;gap:6px;flex-wrap:nowrap">
+      <div class="flow-box">QueryCombiner<br>分辨率自选</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box" style="border-color:#4db87f">HTTP API<br>+ Cache</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box">ECharts<br>图表（12组）</div>
+      <div class="flow-arrow">+</div>
+      <div class="flow-box">Leaflet<br>轨迹地图</div>
+      <div class="flow-arrow">+</div>
+      <div class="flow-box">事件台账<br>处置审计</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SLIDE 18 · 行业参考 ═══ -->
+<div class="slide" id="s18">
+  <div class="eyebrow">17 / STANDARDS</div>
+  <h2>行业参考标准</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="section-tag">REGULATORY REFERENCES</div>
+      <div class="card" style="margin-bottom:12px">
+        <h3>📜 道路运输车辆动态监督管理办法（2022）</h3>
+        <p>要求轨迹上传间隔、超速报警、疲劳驾驶监控、平台存储 1 年。本系统参考轨迹/速度/事件台账需求，不是合规终端。</p>
+      </div>
+      <div class="card" style="margin-bottom:12px">
+        <h3>📜 JT/T 796 平台标准符合性技术审查规范</h3>
+        <p>规定监控平台功能集、数据接口和测试方法。本系统为内部工况分析，未经 JT/T 796 认证。</p>
+      </div>
+      <div class="card">
+        <h3>📜 CGI-430 V2.4.4 用户手册 §1.4</h3>
+        <p>协议权威来源，定义 GPCHCX 46 字段和状态字节含义。加速度单位 g、角速度 °/s 均依据此文档。</p>
+      </div>
+    </div>
+    <div>
+      <div class="section-tag">WHAT THIS PLATFORM IS NOT</div>
+      <div class="card warn" style="margin-bottom:12px">
+        <h3>⛔ 不输出这些结论</h3>
+        <ul>
+          <li>疲劳驾驶判定（需司机身份+驾驶时长）</li>
+          <li>真实道路超速违法（需路段限速地图）</li>
+          <li>油耗分析（需 CAN 数据）</li>
+          <li>ISO 2631 人体振动舒适度等级</li>
+          <li>厘米级定位结论（须复核 RTK 固定解占比）</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>✅ 本平台提供</h3>
+        <ul>
+          <li>原始报文级别的可追溯证据</li>
+          <li>过滤前/后数据的完整对比</li>
+          <li>业务阈值可调的工程事件候选</li>
+          <li>多维惯导信号的时序分析</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SLIDE 19 · 总结 ═══ -->
+<div class="slide cover" id="s19">
+  <div class="hero">
+    <div class="eyebrow">SUMMARY</div>
+    <h1>六层设计保障<br>数据<span>可信</span>、事件<span>可查</span></h1>
+  </div>
+  <div class="cols cols-3">
+    <div class="card">
+      <h3>🔍 原始可溯</h3>
+      <p>每条采样保留原始报文字节偏移，点详情 API 可直接定位到 .log 文件位置。</p>
+    </div>
+    <div class="card gold">
+      <h3>🔬 过滤可解释</h3>
+      <p>每个过滤决策附带原因代码和参考值，异常台账完整呈现决策依据。</p>
+    </div>
+    <div class="card">
+      <h3>📈 聚合不失真</h3>
+      <p>min/max 保护异常峰值，事件检测独立于聚合路径，短窗口直读原始采样。</p>
+    </div>
+    <div class="card">
+      <h3>🔄 可重建</h3>
+      <p>聚合是原始采样的确定性投影，质量版本升级后可完整重算，无信息丢失。</p>
+    </div>
+    <div class="card gold">
+      <h3>⚖️ 规则版本化</h3>
+      <p>规则变更不追溯历史事件，每条记录携带生效时的规则版本，历史可审计。</p>
+    </div>
+    <div class="card">
+      <h3>🛡️ 权限分层</h3>
+      <p>只读用户可查所有数据和事件；管理员才能修改规则、处置事件、管理静止上下文。</p>
+    </div>
+  </div>
+</div>
+
+</div><!-- /deck -->
+
+<div class="progress" id="progress"></div>
+<div class="nav">
+  <button onclick="go(-1)">← 上一页</button>
+  <span class="counter" id="counter">1 / 19</span>
+  <button onclick="go(1)">下一页 →</button>
+</div>
+
+<script>
+const total = 19;
+let cur = 1;
+function go(dir) {
+  const n = Math.max(1, Math.min(total, cur + dir));
+  if (n === cur) return;
+  document.getElementById('s' + cur).classList.remove('active');
+  cur = n;
+  document.getElementById('s' + cur).classList.add('active');
+  document.getElementById('counter').textContent = cur + ' / ' + total;
+  document.getElementById('progress').style.width = (cur / total * 100) + '%';
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown') go(1);
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') go(-1);
+});
+document.getElementById('progress').style.width = (1 / total * 100) + '%';
+</script>
+</body>
+</html>

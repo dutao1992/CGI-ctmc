@@ -1,0 +1,30 @@
+[Unit]
+Description=CTMC vehicle oldest-data retention at 80 percent disk use
+After=ctmc-vehicle.service
+ConditionPathExists=/srv/ctmc-vehicle/data/vehicle.sqlite
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/ctmc-vehicle/current
+ExecStart=/usr/bin/python3.11 -m vehicle.retention --apply
+TimeoutStartSec=12min
+UMask=0077
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX
+# Required only to inspect the root-owned receiver's /proc/<pid>/fd safely.
+CapabilityBoundingSet=CAP_SYS_PTRACE
+ReadWritePaths=/srv/ctmc-vehicle/data /srv/chcnav-cgi430/logs/raw
+MemoryMax=256M
+CPUQuota=25%
+Nice=15
+IOSchedulingClass=idle

@@ -1,0 +1,15 @@
+{
+  "commit": "606c6f3b57b6f1d60458793fea39928d2b11b637",
+  "files": [
+    {
+      "file": "static/vendor/coordtransform.js",
+      "url": "https://raw.githubusercontent.com/wandergis/coordtransform/606c6f3b57b6f1d60458793fea39928d2b11b637/index.js",
+      "sha256": "e941a1a5825c1a615eb3e986a0bfa95b5cba03f6aa89fb20cf3be33259fb897c"
+    },
+    {
+      "file": "static/vendor/coordtransform-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/wandergis/coordtransform/606c6f3b57b6f1d60458793fea39928d2b11b637/LICENSE",
+      "sha256": "801448faad6ec70fbd0d1bf384f6b20cdbd332f333898b1b8122ec26cb0b5d79"
+    }
+  ]
+}

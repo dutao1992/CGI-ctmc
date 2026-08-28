@@ -1,0 +1,32 @@
+[Unit]
+Description=CTMC CGI Vehicle Data Service
+After=network.target ctmc-quality-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/ctmc-vehicle/current
+ExecStart=/usr/bin/python3.11 -m vehicle.server --db /srv/ctmc-vehicle/data/vehicle.sqlite --raw /srv/chcnav-cgi430/logs/raw --port 8790
+Restart=on-failure
+RestartSec=3
+UMask=0077
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/srv/ctmc-vehicle/data
+ReadOnlyPaths=/srv/chcnav-cgi430/logs/raw
+MemoryMax=512M
+CPUQuota=80%
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

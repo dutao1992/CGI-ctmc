@@ -1,0 +1,12 @@
+[Unit]
+Description=Hourly CTMC vehicle storage-pressure check
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=60
+AccuracySec=1s
+Persistent=true
+Unit=ctmc-vehicle-retention.service
+
+[Install]
+WantedBy=timers.target

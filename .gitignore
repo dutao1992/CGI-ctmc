@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.DS_Store
+data/
+tmp/
+evidence/
+tests/fixtures/*.bin
+integration/original/
+integration/local-before/
+integration/generated/
+*.tgz

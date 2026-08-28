@@ -1,0 +1,6 @@
+{
+  "trigger_pct": 80,
+  "target_pct": 75,
+  "protect_hours": 24,
+  "max_run_seconds": 600
+}
