@@ -18,6 +18,7 @@ const rules = {
 };
 const views = {overview:['每一段轨迹，都有数据可循','从运行轨迹到惯导信号，连续观察运输过程中的状态与变化。'],signals:['看见变化，定位原因','速度、姿态、比力与角速度，在同一条时间轴上对照。'],events:['异常有据，处置有痕','区分导航质量、设备告警与业务预警，保留现场采样证据。'],fleet:['从一台设备，到整个车队','独立设备档案与规则，为后续多 CGI 模块接入保留清晰边界。'],quality:['知道数据来自哪里，也知道它的边界','接收、校验、定位和分析，分别给出可核查的状态。'],offline:['让一份离线记录，重新成为完整行程','上传有效数据 CSV 或 CSV.GZ，在不进入实时数据库的前提下重建轨迹、事件与惯导工况。']};
 const colors = ['#397c63','#c38a42','#729dc1'];
+const VIBRATION_VIEW_MODE = 'range';
 let map,routeLayer,eventLayer,playMarker,tileLayer,resizeTimer;
 let offlineMap,offlineRouteLayer,offlineEventLayer,offlineTileLayer;
 
@@ -67,6 +68,12 @@ function clearResults(message){
   for(const id of ['filterBanner','notice','stationaryMapNote'])$(id).hidden=true;
   routeLayer?.clearLayers();eventLayer?.clearLayers();if(playMarker){map.removeLayer(playMarker);playMarker=null;}
   $('playTime').textContent='--:--:--';$('coordinateReadout').textContent=message;$('timeline').value=0;state.playT=0;
+  for(const prefix of ['overview','signal']){
+    const status=$(prefix+'VibrationState'),metrics=$(prefix+'VibrationMetrics'),note=$(prefix+'VibrationNote');
+    if(status){status.textContent='等待有效连续窗';status.className='status-pill warn';}
+    if(metrics)metrics.innerHTML=`<div class="vibration-empty-message">${esc(message)}</div>`;
+    if(note)note.textContent='10 Hz 只能观察 0–4 Hz 低频载体振动；不对缺测数据补零或插值。';
+  }
 }
 function visualBins(span){return span>7*86400?360:span>86400?480:span>6*3600?600:700;}
 function editRange(){
@@ -181,6 +188,7 @@ function renderOverview(){
   $('segments').innerHTML=d.segments.length?d.segments.slice(0,8).map(s=>`<div class="compact-row"><div><strong>${s.state==='confirmed_stationary'?'已确认静止':s.state==='moving'?'运行区段':s.state==='stopped'?'停留区段':'测量不可用'}</strong><small>${clock(s.start)} — ${clock(s.end)}</small></div><span>${duration(s.end-s.start)} · ${number(s.distance_m/1000,2)} km</span></div>`).join(''):'<div class="empty">暂无持续 30 秒以上的连续区段<br>不将静止定位漂移计作运行里程</div>';
   $('eventPreview').innerHTML=d.events.items.length?d.events.items.slice(0,5).map(e=>`<div class="compact-row"><div class="event-kind"><div><strong>${esc(e.label)}</strong><small>${clock(e.start)} — ${clock(e.end)} · ${duration(e.end-e.start)}</small></div></div><button class="text-button" data-event-locate="${e.id}">定位 ↗</button></div>`).join(''):'<div class="empty">所选时段没有触发已启用的规则</div>';
   buildChart('speedChart',[['speed',stationary?'静止速度残差':'车辆速度','km/h',3.6]],{compact:true,threshold:stationary?undefined:state.device.rules.speed_kmh});
+  renderVibration('overview',VIBRATION_VIEW_MODE);
 }
 function initializeMap(){
   if(!window.L)throw new Error('地图库未能加载');
@@ -287,6 +295,42 @@ function buildChart(id,metrics,options={}){
   chart.getZr().off('click');chart.getZr().on('click',event=>{if(event.target)return;if(chart.containPixel('grid',[event.offsetX,event.offsetY])){const v=chart.convertFromPixel('grid',[event.offsetX,event.offsetY]);if(v){setView('overview');selectTime(v[0]/1000);}}});
   chart.resize();
 }
+function vibrationChart(id,kind,vibration,mode='window'){
+  const element=$(id);if(!element||!window.echarts)return;
+  let chart=echarts.getInstanceByDom(element);
+  if(!chart){chart=echarts.init(element,null,{renderer:'canvas'});state.charts.push(chart);}
+  const available=Boolean(vibration?.available),rangeMode=mode==='range',compact=id.startsWith('overview')&&!rangeMode;
+  const common={animation:false,textStyle:{fontFamily:'PingFang SC, sans-serif'},grid:{left:52,right:20,top:rangeMode?38:18,bottom:compact?36:48},legend:rangeMode?{show:true,top:8,left:55,itemWidth:14,itemHeight:2,textStyle:{fontSize:9,color:'#788d6d'}}:{show:false},tooltip:{trigger:'axis',renderMode:'richText',backgroundColor:'#fff',borderColor:'#d4dec9',textStyle:{fontSize:10,color:'#315c45'},valueFormatter:value=>number(value,5)},graphic:[{type:'text',left:'center',top:'middle',invisible:available,style:{text:vibration?.reason||'本时段没有可用的连续振动窗',fill:'#7a8970',fontSize:11,lineHeight:20,textAlign:'center'}}]};
+  if(kind==='time'){
+    const rows=available?(rangeMode?vibration.series:vibration.time):[];
+    const rangeSeries=[{name:'桶内 RMS 动态幅值',type:'line',data:rows.map(row=>[row[0],row[1]]),showSymbol:false,lineStyle:{width:2,color:'#c0833c'},areaStyle:{color:'#c0833c18'},itemStyle:{color:'#c0833c'},connectNulls:false},{name:'桶内峰值偏差',type:'line',data:rows.map(row=>[row[0],row[2]]),showSymbol:false,lineStyle:{width:1.3,color:'#386f5b'},itemStyle:{color:'#386f5b'},connectNulls:false}];
+    const windowSeries=[{name:'动态合成比力',type:'line',data:rows.map(row=>[row[0],row[1]]),showSymbol:false,lineStyle:{width:1.25,color:'#386f5b'},itemStyle:{color:'#386f5b'},connectNulls:false},{name:'1 秒 RMS 包络',type:'line',data:rows.map(row=>[row[0],row[2]]),showSymbol:false,lineStyle:{width:2,color:'#c0833c'},areaStyle:{color:'#c0833c18'},itemStyle:{color:'#c0833c'},connectNulls:false}];
+    const tooltip=rangeMode?{...common.tooltip,formatter:params=>{const list=Array.isArray(params)?params:[params],timestamp=list[0]?.value?.[0]??list[0]?.data?.[0],row=rows.find(item=>item[0]===timestamp);if(!row)return '';return `${chartClock(timestamp).replace('\n',' ')}<br/>桶内 RMS 动态幅值：${number(row[1],5)} g<br/>桶内峰值偏差：${number(row[2],5)} g<br/>均值合成比力：${number(row[3],5)} g<br/>桶内范围：${number(row[4],5)} – ${number(row[5],5)} g<br/>有效值：${number(row[6],0)} 点`;}}:common.tooltip;
+    chart.setOption({...common,tooltip,xAxis:{type:'time',min:rangeMode?state.data.start*1000:(available?vibration.start*1000:state.data.start*1000),max:rangeMode?state.data.end*1000:(available?vibration.end*1000:state.data.end*1000),axisLine:{lineStyle:{color:'#dbe4d7'}},axisTick:{show:false},axisLabel:{fontSize:9,color:'#82917b',formatter:value=>chartClock(value),hideOverlap:true},splitLine:{show:false}},yAxis:{type:'value',name:'g',nameTextStyle:{fontSize:9,color:'#8b9785'},scale:true,axisLabel:{fontSize:9,color:'#82917b'},splitLine:{lineStyle:{color:'#edf1e7',type:'dashed'}}},dataZoom:compact?[]:[{type:'inside',filterMode:'none',start:0,end:100},{type:'slider',start:0,end:100,height:12,bottom:8,borderColor:'#d9e3ce',fillerColor:'#8ca97124',handleStyle:{color:'#6d9360'},textStyle:{fontSize:8}}],series:rangeMode?rangeSeries:windowSeries},true);
+  }else{
+    const maximum=available?vibration.usable_frequency_hz[1]:4,dominant=available?vibration.metrics.dominant_hz:null;
+    chart.setOption({...common,grid:{...common.grid,left:48},xAxis:{type:'value',min:0,max:maximum,name:'Hz',nameLocation:'end',nameTextStyle:{fontSize:9,color:'#8b9785'},axisLine:{lineStyle:{color:'#dbe4d7'}},axisTick:{show:false},axisLabel:{fontSize:9,color:'#82917b'},splitLine:{show:false}},yAxis:{type:'value',name:'幅值 g',nameTextStyle:{fontSize:9,color:'#8b9785'},min:0,axisLabel:{fontSize:9,color:'#82917b'},splitLine:{lineStyle:{color:'#edf1e7',type:'dashed'}}},series:[{name:'FFT 单边幅值',type:'bar',data:available?vibration.spectrum:[],barMaxWidth:6,itemStyle:{color:'#4c8068'},emphasis:{itemStyle:{color:'#bd7c35'}},markLine:Number.isFinite(dominant)?{symbol:'none',label:{formatter:`主频 ${number(dominant,2)} Hz`,fontSize:9,color:'#9a642d'},lineStyle:{type:'dashed',color:'#bd7c35'},data:[{xAxis:dominant}]}:undefined}]},true);
+  }
+  chart.resize();
+}
+function renderVibration(prefix,mode='window'){
+  const all=state.data?.vibration||{},vibration=mode==='range'?(all.range||{available:false,reason:'查询结果中没有筛选时段振动值'}):all,status=$(prefix+'VibrationState'),metrics=$(prefix+'VibrationMetrics'),note=$(prefix+'VibrationNote');
+  if(!status||!metrics||!note)return;
+  status.className='status-pill '+(vibration.available?'good':'warn');
+  if(vibration.available){
+    const values=vibration.metrics;
+    const cards=mode==='range'?[['筛选区间 RMS',number(values.rms_g,4),'g','桶内去均值动态幅值'],['峰值偏差',number(values.peak_g,4),'g','各桶极值偏差最大值'],['峰峰值',number(values.peak_to_peak_g,4),'g','各桶峰峰值最大值'],['有效值',number(vibration.samples,0),'点',`${number(vibration.buckets,0)} 个时间桶`]]:[['整窗 RMS',number(values.rms_g,4),'g','动态合成比力'],['峰值',number(values.peak_g,4),'g',`峰峰值 ${number(values.peak_to_peak_g,4)} g`],['波峰因数',number(values.crest_factor,2),'', '峰值 / RMS'],['主频',number(values.dominant_hz,2),'Hz',`幅值 ${number(values.dominant_amplitude_g,4)} g`]];
+    status.textContent=mode==='range'?`${number(vibration.buckets,0)} 个时间桶 · ${number(vibration.samples,0)} 个有效值`:`${number(vibration.duration_s,1)} 秒连续窗 · ${number(vibration.sample_hz,2)} Hz`;
+    metrics.innerHTML=cards.map(([label,value,unit,detail])=>`<div class="vibration-metric"><span>${label}</span><strong>${value}<small>${unit}</small></strong><em>${detail}</em></div>`).join('');
+    note.textContent=mode==='range'?`${stamp(vibration.start)} — ${clock(vibration.end)} · ${number(vibration.samples,0)} 个有效值 / ${number(vibration.buckets,0)} 个等时桶。悬停曲线可读取每桶 RMS 与峰值偏差；${vibration.capability}。`:`${stamp(vibration.start)} — ${clock(vibration.end)} · ${vibration.samples} 点 · 频率分辨率 ${number(vibration.frequency_resolution_hz,3)} Hz。${prefix==='signal'?vibration.method+'；'+vibration.source+'。':''}${vibration.capability}。`;
+  }else{
+    status.textContent='暂无可分析连续窗';
+    metrics.innerHTML=`<div class="vibration-empty-message">${esc(vibration.reason)}</div>`;
+    note.textContent=(vibration.capability||'10 Hz 仅用于 0–4 Hz 低频载体振动观察，不用于高频机械故障诊断')+'。';
+  }
+  vibrationChart(prefix+'VibrationTimeChart','time',vibration,mode);
+  vibrationChart(prefix+'VibrationSpectrumChart','spectrum',mode==='range'?all:vibration,'window');
+}
 const chartGroups=[
  ['姿态角','°',[['heading','航向','°'],['pitch','俯仰','°'],['roll','横滚','°']]],
  ['三轴角速度','°/s',[['gx','X 轴','°/s'],['gy','Y 轴','°/s'],['gz','Z 轴','°/s']]],
@@ -302,6 +346,7 @@ const chartGroups=[
  ['航迹角与标准差','°',[['course','航迹角','°'],['course_std','航迹角 σ','°']]]
 ];
 function renderSignals(){
+  renderVibration('signal',VIBRATION_VIEW_MODE);
   if(!$('signalCharts').children.length)$('signalCharts').innerHTML=chartGroups.map(([title,unit],i)=>`<section class="panel"><div class="panel-head"><h2>${title}<span class="h2-unit">${unit}</span></h2><span class="muted">${String(i+1).padStart(2,'0')}</span></div><div class="chart" id="signal-${i}"></div><p class="signal-data-note" id="signal-note-${i}"></p></section>`).join('');
   const stationary=stationaryRange(state.data.quality?.contexts,state.data.summary.first_t,state.data.summary.last_t);
   chartGroups.forEach(([title,unit,metrics],i)=>{

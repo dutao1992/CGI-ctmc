@@ -2,7 +2,8 @@
 
 This does not fabricate raw receiver evidence or write a database.  It feeds
 1,440 mergeable ten-minute summaries, representing 8.64 million raw samples,
-through the same QueryCombiner used by the production query path.
+through the same QueryCombiner used by the production query path, including
+the compact vibration statistics used by the overview trend.
 """
 import gzip
 import json
@@ -32,6 +33,7 @@ def snapshot(device, start, index, count=6000):
     return dict(version=ROLLUP_VERSION,device_id=device,bucket_start=start,bucket_s=600,
                 count=count,first=first,last=last,fixed=count,valid=count,max_speed=.72,
                 fix_counts={'4':count},metrics=metrics,
+                vibration=[1.0,1.0,float(count),float(count),count],
                 quality_groups=[[quality.VERSION,0,0,count]],covered_s=599.9,
                 mileage_m=0,moving_s=0,gaps=[],segments=[dict(start=first['t'],end=last['t'],
                 state='stopped',distance_m=0,max_kmh=.72,break_before=True)],track=track)
@@ -52,6 +54,8 @@ def run(days=10, hz=10, bins=360):
     assert result['total'] == days*86400*hz
     assert result['aggregation']['buckets'] <= bins
     assert peak == 5.0
+    assert result['vibration_range']['samples'] == days*86400*hz
+    assert result['vibration_range']['buckets'] <= bins
     return dict(days=days,hz=hz,equivalent_raw_points=result['total'],rollup_rows=bucket_count,
                 output_buckets=result['aggregation']['buckets'],peak_ax=peak,
                 combine_and_encode_ms=round(elapsed_ms,1),json_bytes=len(encoded),

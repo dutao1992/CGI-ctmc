@@ -1,6 +1,7 @@
 import json
 import gzip
 import io
+import math
 from pathlib import Path
 import tempfile
 import threading
@@ -16,6 +17,7 @@ from vehicle.rules import conditions, DEFAULTS
 from vehicle.store import Store, Ingestor, _sum_existing_sizes
 from vehicle.server import create_handler, BoundedServer
 from vehicle.offline import analyze_stream
+from vehicle.vibration import analyze as analyze_vibration
 
 LIVE = (Path(__file__).parent/'fixtures/gpchcx-live.txt').read_bytes().splitlines()
 
@@ -64,6 +66,29 @@ class ProtocolTests(unittest.TestCase):
     def test_hex_status_warning(self):
         p=parse(altered(status='42',warning='4000'))
         self.assertEqual((p['fix_mode'],p['nav_mode'],p['warning']),(4,2,16384))
+
+
+class VibrationTests(unittest.TestCase):
+    def test_ten_hz_window_identifies_low_frequency_signal_and_rms(self):
+        samples=[]
+        for index in range(600):
+            t=1_000+index/10
+            value=.08*math.sin(2*math.pi*2*index/10)
+            samples.append(dict(t=t,ax=1+value,ay=0,az=0))
+        result=analyze_vibration(samples)
+        self.assertTrue(result['available'])
+        self.assertAlmostEqual(result['sample_hz'],10,places=2)
+        self.assertAlmostEqual(result['metrics']['dominant_hz'],2,delta=.03)
+        self.assertAlmostEqual(result['metrics']['rms_g'],.08/math.sqrt(2),delta=.002)
+        self.assertLessEqual(result['usable_frequency_hz'][1],4)
+        self.assertEqual(len(result['time']),600)
+
+    def test_vibration_refuses_short_or_gapped_samples(self):
+        samples=[dict(t=1_000+index/10,ax=1,ay=0,az=0) for index in range(90)]
+        samples += [dict(t=2_000+index/10,ax=1,ay=0,az=0) for index in range(90)]
+        result=analyze_vibration(samples)
+        self.assertFalse(result['available'])
+        self.assertIn('不对缺测数据插值',result['reason'])
 
 
 class StoreTests(unittest.TestCase):
@@ -129,6 +154,22 @@ class StoreTests(unittest.TestCase):
         self.ingest(*[altered(tow=tow+i*.01,ax=5 if i==50 else 1) for i in range(100)])
         t=parse(LIVE[0])['t'];out=self.store.query('6094510',t-1,t+100,bins=50)
         self.assertEqual(max(r[3] for r in out['series']['ax']),5)
+    def test_query_adds_bounded_vibration_projection_without_new_rows(self):
+        point=parse(LIVE[0]);tow=point['tow']
+        frames=[altered(tow=tow+i/10,ax=1+.05*math.sin(2*math.pi*1.5*i/10),ay=0,az=0) for i in range(600)]
+        self.ingest(*frames)
+        before=self.store.health()['aggregation']['raw_points']
+        out=self.store.query(point['device_id'],point['t']-1,point['t']+61)
+        vibration=out['vibration']
+        self.assertTrue(vibration['available'])
+        self.assertAlmostEqual(vibration['metrics']['dominant_hz'],1.5,delta=.03)
+        self.assertLessEqual(len(vibration['time']),601)
+        self.assertTrue(vibration['range']['available'])
+        self.assertEqual(vibration['range']['samples'],600)
+        self.assertEqual(vibration['range']['series_fields'],['timestamp_ms','rms_g','peak_g','mean_g','min_g','max_g','count'])
+        self.assertGreaterEqual(len(vibration['range']['series']),50)
+        self.assertAlmostEqual(vibration['range']['metrics']['mean_g'],1.0,delta=.01)
+        self.assertEqual(self.store.health()['aggregation']['raw_points'],before)
     def test_long_query_uses_verified_rollups_preserves_peak_and_caches(self):
         tow=parse(LIVE[0])['tow']
         frames=[]
@@ -165,6 +206,9 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(out['aggregation']['source_resolution_s'],600)
         self.assertLessEqual(out['aggregation']['buckets'],360)
         self.assertEqual(max(row[3] for row in out['series']['ax']),5)
+        self.assertTrue(out['vibration']['range']['available'])
+        self.assertEqual(out['vibration']['range']['samples'],50)
+        self.assertLessEqual(out['vibration']['range']['buckets'],360)
         self.assertFalse(any('SELECT COUNT(*) FROM points' in statement for statement in statements))
         health=self.store.health()['aggregation']
         self.assertTrue(health['ready'])

@@ -18,7 +18,9 @@ METRICS = ['speed','heading','pitch','roll','gx','gy','gz','ax','ay','az','ve','
            've_std','vn_std','vu_std','course','course_std']
 ROLLUP_SECONDS = 60
 ROLLUP_LEVELS = (60,600)
-ROLLUP_VERSION = quality.VERSION * 100 + 2
+# Bump when the payload shape changes; the deployment preflight rebuilds both
+# levels before serving queries so every bucket carries vibration statistics.
+ROLLUP_VERSION = quality.VERSION * 100 + 3
 ENDPOINT_FIELDS = list(dict.fromkeys(
     ['t','lat','lon','speed','heading','fix_mode','nav_mode','valid_pos','stationary_context','lat_std','lon_std'] + METRICS
 ))
@@ -58,6 +60,22 @@ def _motion_state(p):
     return 'unknown'
 
 
+def _specific_force_magnitude(p):
+    """Return the gravity-included three-axis specific-force magnitude."""
+    values = [p.get(key) for key in ('ax', 'ay', 'az')]
+    if not all(isinstance(value, (int, float)) and math.isfinite(value) for value in values):
+        return None
+    return math.sqrt(sum(value * value for value in values))
+
+
+def _vibration_stats(points):
+    """Compact min/max/sum/sum-of-squares/count stats for one time bucket."""
+    values = [value for _, value in points if isinstance(value, (int, float)) and math.isfinite(value)]
+    if not values:
+        return [None, None, 0.0, 0.0, 0]
+    return [min(values), max(values), sum(values), sum(value * value for value in values), len(values)]
+
+
 class RollupBuilder:
     """Build one independent time bucket from ordered joined point rows."""
     def __init__(self, device_id, start, seconds=ROLLUP_SECONDS):
@@ -76,6 +94,11 @@ class RollupBuilder:
         self.current = None
         self.track = []
         self.route_break = True
+        # Keep one preferred protocol per timestamp so GPCHC + GPCHCX pairs
+        # cannot double-count the same vibration sample.  The map is bounded
+        # by the current source bucket (60 s online; offline can promote to
+        # the bounded 10/60/600/1800 s source levels).
+        self.vibration_points = {}
 
     def add(self, row):
         raw = dict(row)
@@ -102,6 +125,12 @@ class RollupBuilder:
             a[2] += value
             a[3] += 1
             a[4] = value
+
+        magnitude = _specific_force_magnitude(p)
+        if magnitude is not None:
+            previous = self.vibration_points.get(p['t'])
+            if previous is None or p.get('protocol') == 'GPCHCX':
+                self.vibration_points[p['t']] = (p.get('protocol'), magnitude)
 
         transition = _transition(self.prev,p)
         self.covered += transition['covered']
@@ -145,6 +174,7 @@ class RollupBuilder:
                     max_speed=self.max_speed,fix_counts=dict(self.fix_counts),metrics=self.metrics,
                     quality_groups=[[v if v is not None else None,m,r,n] for (v,m,r),n in self.quality_groups.items()],
                     covered_s=self.covered,mileage_m=self.mileage,moving_s=self.moving,
+                    vibration=_vibration_stats(self.vibration_points.values()),
                     gaps=self.gaps,segments=self.segments,track=self.track)
 
 
@@ -165,12 +195,18 @@ class QueryCombiner:
         self.track = []
         self.track_truncated = False
 
+    @staticmethod
+    def _empty_vibration_stats():
+        return [None, None, 0.0, 0.0, 0]
+
     def _key(self, t):
         return min(self.bins-1,max(0,int((t-self.start)/(self.end-self.start)*self.bins)))
 
     def _merge_metrics(self, snap):
         key = self._key((snap['first']['t']+snap['last']['t'])/2)
-        group = self.groups.setdefault(key,{'t':snap['first']['t'],'values':{k:[None,None,0.0,0,None] for k in METRICS}})
+        group = self.groups.setdefault(key,{'t':snap['first']['t'],
+                                            'values':{k:[None,None,0.0,0,None] for k in METRICS},
+                                            'vibration':self._empty_vibration_stats()})
         group['t'] = min(group['t'],snap['first']['t'])
         for metric, source in snap['metrics'].items():
             target = group['values'][metric]
@@ -181,6 +217,15 @@ class QueryCombiner:
                 target[2] += total
                 target[3] += n
                 target[4] = last
+        source_vibration = snap.get('vibration') or self._empty_vibration_stats()
+        target_vibration = group['vibration']
+        lo, hi, total, squares, count = source_vibration
+        if count:
+            target_vibration[0] = lo if target_vibration[0] is None else min(target_vibration[0],lo)
+            target_vibration[1] = hi if target_vibration[1] is None else max(target_vibration[1],hi)
+            target_vibration[2] += total
+            target_vibration[3] += squares
+            target_vibration[4] += count
 
     def _merge_segments(self, snap, transition):
         parts = [dict(part) for part in snap['segments']]
@@ -241,6 +286,7 @@ class QueryCombiner:
     def snapshot(self, start, seconds):
         """Return a mergeable derived bucket, used to build coarser levels."""
         values = self.groups.get(0,{'values':{k:[None,None,0.0,0,None] for k in METRICS}})['values']
+        vibration = self.groups.get(0,{}).get('vibration',self._empty_vibration_stats())
         track = []
         for point in self.track:
             item = dict(point);item.pop('_bucket',None);item.pop('tail',None);track.append(item)
@@ -249,6 +295,7 @@ class QueryCombiner:
                     max_speed=self.max_speed,fix_counts=dict(self.fix_counts),metrics=values,
                     quality_groups=[[version,mask,reasons,n] for (version,mask,reasons),n in self.quality_groups.items()],
                     covered_s=self.covered,mileage_m=self.mileage,moving_s=self.moving,
+                    vibration=vibration,
                     gaps=self.gaps,segments=self.segments,track=track)
 
     def quality_summary(self, contexts):
@@ -273,11 +320,33 @@ class QueryCombiner:
 
     def finish(self, contexts, source, source_resolution_s, elapsed_ms):
         series = {key:[] for key in METRICS}
+        vibration_series = []
+        vibration_samples = 0
+        vibration_sum = 0.0
+        vibration_dynamic_squares = 0.0
+        vibration_peak = None
+        vibration_peak_to_peak = None
         for key in sorted(self.groups):
             group = self.groups[key]
             for metric,(lo,hi,total,n,last) in group['values'].items():
                 mean = last if metric in ('heading','course') else total/n if n else None
                 series[metric].append([group['t']*1000,mean,lo,hi])
+            lo,hi,total,squares,count = group.get('vibration',self._empty_vibration_stats())
+            if count:
+                mean = total / count
+                variance = max(0.0, squares / count - mean * mean)
+                rms = math.sqrt(variance)
+                peak = max(abs(lo - mean), abs(hi - mean))
+                vibration_series.append([
+                    round(group['t'] * 1000), round(rms, 7), round(peak, 7),
+                    round(mean, 7), round(lo, 7), round(hi, 7), count,
+                ])
+                vibration_samples += count
+                vibration_sum += total
+                vibration_dynamic_squares += max(0.0, squares - total * total / count)
+                vibration_peak = peak if vibration_peak is None else max(vibration_peak, peak)
+                span = hi - lo
+                vibration_peak_to_peak = span if vibration_peak_to_peak is None else max(vibration_peak_to_peak, span)
         track = []
         for p in self.track[:10000]:
             p = dict(p); p.pop('_bucket',None); p.pop('tail',None); track.append(p)
@@ -287,9 +356,27 @@ class QueryCombiner:
             if item['end']-item['start'] >= 30:
                 segments.append(item)
         span = self.last-self.first if self.first is not None else 0
+        range_metrics = {
+            'rms_g': round(math.sqrt(vibration_dynamic_squares / vibration_samples), 7) if vibration_samples else None,
+            'peak_g': round(vibration_peak, 7) if vibration_peak is not None else None,
+            'peak_to_peak_g': round(vibration_peak_to_peak, 7) if vibration_peak_to_peak is not None else None,
+            'mean_g': round(vibration_sum / vibration_samples, 7) if vibration_samples else None,
+        }
+        vibration_range = dict(
+            available=bool(vibration_series), start=self.start, end=self.end,
+            reason=None if vibration_series else ('所选时段无采样' if not self.count else '筛选时段没有包含三轴比力的有效值'),
+            samples=vibration_samples, buckets=len(vibration_series),
+            series_fields=['timestamp_ms','rms_g','peak_g','mean_g','min_g','max_g','count'],
+            series=vibration_series,
+            metrics=range_metrics,
+            method='筛选时间内按等时桶统计三轴比力合成模长；RMS 为桶内去均值动态幅值，峰值为桶内极值偏差',
+            source=source, source_resolution_s=source_resolution_s,
+            capability='10 Hz 仅用于 0-4 Hz 低频载体振动观察；聚合曲线用于趋势和取值，不用于轴承、齿轮等高频故障诊断',
+        )
         return dict(device_id=self.device_id,start=self.start,end=self.end,total=self.count,track=track,
                     gaps=self.gaps[:2000],track_truncated=self.track_truncated or len(self.track)>10000,
                     series=series,quality=self.quality_summary(contexts),segments=segments[:1000],
+                    vibration_range=vibration_range,
                     summary=dict(first_t=self.first,last_t=self.last,distance_km=self.mileage/1000,moving_s=self.moving,
                                  covered_s=self.covered,max_kmh=self.max_speed,fixed_pct=100*self.fixed/self.count if self.count else 0,
                                  valid_pct=100*self.valid/self.count if self.count else 0,gap_count=len(self.gaps),

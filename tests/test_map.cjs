@@ -71,7 +71,7 @@ async function appHarness(){
       return {ok:true,json:async()=>data};}
   };
   vm.createContext(context);
-  vm.runInContext(fs.readFileSync(require.resolve('../static/app.js'),'utf8')+'\nthis.appTest={renderMap,selectTime,locateEvent,buildChart,query,chooseRange,setRange,setView,loadDevices,loadQuarantine,stationaryRange,renderFilterSummary,renderOfflineAnalysis,chooseOfflineFile,analyzeOfflineFile,state,setData(d){state.data=d;state.device={id:"SN1",rules:{}};},setOfflineData(d){state.offlineData=d;}};',context);
+  vm.runInContext(fs.readFileSync(require.resolve('../static/app.js'),'utf8')+'\nthis.appTest={renderMap,renderOverview,selectTime,locateEvent,buildChart,renderVibration,query,chooseRange,setRange,setView,loadDevices,loadQuarantine,stationaryRange,renderFilterSummary,renderOfflineAnalysis,chooseOfflineFile,analyzeOfflineFile,state,setData(d){state.data=d;state.device={id:"SN1",rules:{}};},setOfflineData(d){state.offlineData=d;}};',context);
   await new Promise(resolve=>setImmediate(resolve));
   const app=context.appTest;
   return {app,calls,node,shortcuts,interval:()=>interval(),respond(fn){respond=fn;},offlineRespond(fn){offlineRespond=fn;},offlineUpload:()=>offlineUpload,setNow(value){now=value;},setPoint(p){point=p;},
@@ -83,7 +83,8 @@ function deviceFixture(id='SN1',last=1787740797.9){return {id,name:id,last_t:las
 function queryFixture(params,total=3){
   const start=+params.get('start'),end=+params.get('end');
   const t=end-2,track=total?[{t,lat:31.2456,lon:121.616,speed:.1}]:[];
-  return {device_id:params.get('device'),start,end,total,track,events:{total:0,items:[]},segments:[],summary:{first_t:total?t:null,last_t:total?t:null,distance_km:0,moving_s:0,max_kmh:.36,fixed_pct:100,gap_count:0},series:{speed:total?[[t*1000,.1,.1,.1]]:[],gx:total?[[t*1000,.2,.2,.2]]:[]},gaps:[],aggregation:{buckets:total?1:0,bucket_s:(end-start)/700},quality:{version:1,total,anomaly_samples:0,unavailable_samples:0,pending_samples:0,contexts:[],excluded_fields:{},reasons:[]}};
+  const vibration=total?{available:true,start:t-1,end:t,samples:11,sample_hz:10,duration_s:1,frequency_resolution_hz:.1,usable_frequency_hz:[.2,4],time:[[t*1000-1000,.01,null],[t*1000,.02,.015]],spectrum:[[1,.01],[2,.03]],metrics:{rms_g:.015,peak_g:.02,peak_to_peak_g:.03,crest_factor:1.33,dominant_hz:2,dominant_amplitude_g:.03},range:{available:true,start,end,samples:total,buckets:1,series_fields:['timestamp_ms','rms_g','peak_g','mean_g','min_g','max_g','count'],series:[[start*1000,.011,.02,1,.98,1.02,total]],metrics:{rms_g:.011,peak_g:.02,peak_to_peak_g:.04,mean_g:1},capability:'10 Hz 仅用于 0–4 Hz 低频载体振动观察'},method:'测试处理链',source:'测试连续原始窗',capability:'10 Hz 仅用于 0–4 Hz 低频载体振动观察'}:{available:false,reason:'所选时段无采样',range:{available:false,reason:'所选时段无采样',capability:'10 Hz 仅用于 0–4 Hz 低频载体振动观察'},capability:'10 Hz 仅用于 0–4 Hz 低频载体振动观察'};
+  return {device_id:params.get('device'),start,end,total,track,events:{total:0,items:[]},segments:[],summary:{first_t:total?t:null,last_t:total?t:null,distance_km:0,moving_s:0,max_kmh:.36,fixed_pct:100,gap_count:0},series:{speed:total?[[t*1000,.1,.1,.1]]:[],gx:total?[[t*1000,.2,.2,.2]]:[]},vibration,gaps:[],aggregation:{buckets:total?1:0,bucket_s:(end-start)/700},quality:{version:1,total,anomaly_samples:0,unavailable_samples:0,pending_samples:0,contexts:[],excluded_fields:{},reasons:[]}};
 }
 function offlineFixture(){
   const start=1787731200,end=1787731265,track=[{t:start,lat:31.2456,lon:121.616,speed:2,break_before:true},{t:end,lat:31.2457,lon:121.6161,speed:3}];
@@ -127,6 +128,31 @@ test('adjacent bounded and active stationary facts cover a selected range withou
   assert.equal(app.stationaryRange(scopes,100,500),true);
   assert.equal(app.stationaryRange(scopes,90,500),false);
   assert.equal(app.stationaryRange([scopes[0],scopes[2]],100,500),false);
+});
+
+test('10 Hz vibration spotlight renders bounded waveform, RMS and 0-4 Hz spectrum without overstating capability',async()=>{
+  const h=await appHarness();h.setDevices([deviceFixture()]);h.app.setView('signals');await h.clickRange(900);
+  const time=h.calls.options.get('signalVibrationTimeChart'),spectrum=h.calls.options.get('signalVibrationSpectrumChart');
+  assert.equal(time.xAxis.min,h.app.state.data.start*1000);assert.equal(time.xAxis.max,h.app.state.data.end*1000);
+  assert.equal(time.series[0].data[0][1],.011);assert.equal(time.series[1].data[0][1],.02);
+  assert.equal(spectrum.xAxis.max,4);assert.equal(spectrum.series[0].data.length,2);
+  assert.match(h.node('signalVibrationState').textContent,/1 个时间桶/);
+  assert.match(h.node('signalVibrationMetrics').innerHTML,/筛选区间 RMS/);
+  assert.match(h.node('signalVibrationNote').textContent,/低频载体振动观察/);
+  h.app.setView('overview');h.app.renderOverview();
+  const range=h.calls.options.get('overviewVibrationTimeChart');
+  const overviewSpectrum=h.calls.options.get('overviewVibrationSpectrumChart');
+  assert.equal(range.xAxis.min,h.app.state.data.start*1000);assert.equal(range.xAxis.max,h.app.state.data.end*1000);
+  assert.equal(range.series[0].data[0][1],.011);assert.equal(range.series[1].data[0][1],.02);
+  assert.deepEqual(time.series[0].data,range.series[0].data);
+  assert.deepEqual(time.series[1].data,range.series[1].data);
+  assert.deepEqual(spectrum.series[0].data,overviewSpectrum.series[0].data);
+  assert.match(range.tooltip.formatter([{value:[h.app.state.data.start*1000,.011]}]),/有效值：3 点/);
+  assert.match(h.node('overviewVibrationState').textContent,/1 个时间桶/);
+  assert.match(h.node('overviewVibrationMetrics').innerHTML,/筛选区间 RMS/);
+  h.respond(async params=>queryFixture(params,0));await h.clickRange(900);
+  assert.match(h.node('overviewVibrationState').textContent,/暂无可分析/);
+  assert.match(h.calls.options.get('overviewVibrationTimeChart').graphic[0].style.text,/所选时段无采样/);
 });
 
 test('quality page explains conservative automatic exit and keeps manual close admin-only',async()=>{

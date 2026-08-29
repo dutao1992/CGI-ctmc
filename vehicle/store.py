@@ -13,6 +13,7 @@ from . import quality
 from .aggregate import (METRICS, ROLLUP_LEVELS, ROLLUP_SECONDS, ROLLUP_VERSION, QueryCombiner,
                         RollupBuilder, bucket_start, decode as decode_rollup,
                         encode as encode_rollup)
+from .vibration import LOOKBACK_S, analyze as analyze_vibration, unavailable as vibration_unavailable
 
 
 def _sum_existing_sizes(paths):
@@ -434,6 +435,26 @@ class Store:
             p['data_view'] = 'filtered'
             return describe(p)
 
+    @staticmethod
+    def _vibration(connection, sn, start, last_t):
+        if last_t is None:
+            return vibration_unavailable('所选时段无采样')
+        rows = connection.execute(
+            quality.JOIN + ' WHERE p.device_id=? AND p.t>=? AND p.t<=? ORDER BY p.t,p.protocol',
+            (sn, max(start, last_t - LOOKBACK_S), last_t),
+        )
+        # Multiple enabled protocols may share one timestamp. Prefer GPCHCX,
+        # while still allowing a single GPCHC stream to use the same projection.
+        by_time = {}
+        for row in rows:
+            point = quality.project(row)
+            if not all(point.get(key) is not None for key in ('ax', 'ay', 'az')):
+                continue
+            current = by_time.get(point['t'])
+            if current is None or point['protocol'] == 'GPCHCX':
+                by_time[point['t']] = point
+        return analyze_vibration(list(by_time.values()))
+
     def query(self, sn, start, end, bins=700):
         if not math.isfinite(start+end) or end <= start or end-start > 31*86400:
             raise ValueError('请选择有效时间范围，单次不超过 31 天')
@@ -489,7 +510,10 @@ class Store:
                     combiner.add(snapshot)
                 source = 'raw'
                 resolution = 0
+            vibration = self._vibration(c, sn, start, combiner.last)
         result = combiner.finish(contexts,source,resolution,(time.perf_counter()-started)*1000)
+        vibration['range'] = result.pop('vibration_range')
+        result['vibration'] = vibration
         result['events'] = self.events(sn,start,end)
         result['aggregation']['query_ms'] = round((time.perf_counter()-started)*1000,1)
         ttl = 10 if device_latest is not None and end >= device_latest-120 else 60
