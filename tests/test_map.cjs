@@ -135,6 +135,9 @@ test('10 Hz vibration spotlight renders bounded waveform, RMS and 0-4 Hz spectru
   const time=h.calls.options.get('signalVibrationTimeChart'),spectrum=h.calls.options.get('signalVibrationSpectrumChart');
   assert.equal(time.xAxis.min,h.app.state.data.start*1000);assert.equal(time.xAxis.max,h.app.state.data.end*1000);
   assert.equal(time.series[0].data[0][1],.011);assert.equal(time.series[1].data[0][1],.02);
+  assert.equal(time.tooltip.renderMode,'html');assert.equal(time.tooltip.confine,true);
+  const signalTooltip=time.tooltip.formatter([{value:[h.app.state.data.start*1000,.011],dataIndex:0}]);
+  assert.match(signalTooltip,/桶内 RMS 动态幅值/);assert.match(signalTooltip,/桶内峰值偏差/);assert.match(signalTooltip,/均值合成比力/);assert.match(signalTooltip,/桶内范围/);assert.match(signalTooltip,/有效值：3 点/);
   assert.equal(spectrum.xAxis.max,4);assert.equal(spectrum.series[0].data.length,2);
   assert.match(h.node('signalVibrationState').textContent,/1 个时间桶/);
   assert.match(h.node('signalVibrationMetrics').innerHTML,/筛选区间 RMS/);
