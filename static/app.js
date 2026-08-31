@@ -84,10 +84,20 @@ function editRange(){
   $('rangeCaption').textContent='自定义时间 · 尚未应用；自动跟随已暂停';
   $('loading').hidden=true;$('queryBtn').disabled=false;error('');
 }
+function renderServiceState(){
+  const pill=$('serviceState'),health=state.health,device=state.device;
+  if(!health){pill.textContent='正在连接';pill.className='status-pill';return;}
+  if(!health.ok){pill.textContent='● 采集服务异常';pill.className='status-pill bad';return;}
+  if(!device?.last_t){pill.textContent='● 服务正常 · 等待设备';pill.className='status-pill warn';return;}
+  const stale=Date.now()/1000-device.last_t>60;
+  pill.textContent=stale?'● 服务正常 · 设备无新数据':'● 采集与设备数据正常';
+  pill.className='status-pill '+(stale?'warn':'good');
+}
 function renderFreshness(){
   const d=state.device,age=d?.last_t?Math.max(0,Date.now()/1000-d.last_t):null;
   $('latestSample').textContent=age===null?'该设备暂无有效采样':`最新采样：${stamp(d.last_t)} · ${age>60?'距今 '+duration(age)+'，此后暂无新采样':'最近 1 分钟内有采样'}`;
   $('latestDataBtn').disabled=!d?.last_t;
+  renderServiceState();
 }
 function chooseRange(seconds=state.range){setRange(seconds);return query({relative:true,refreshDevices:true});}
 async function loadDevices(initial=false,preserveForm=false){
@@ -548,7 +558,7 @@ function renderQuality(){
   else if(retention.warning){error('存储清理：'+retention.warning);}
   else if(h.disk_free_bytes<5*1073741824){error('服务器可用空间低于 5 GB；自动清理仅限符合条件的旧车载数据，请同时安排容量检查。');}
 }
-async function refreshHealth(){try{state.health=await api('health');$('serviceState').textContent=state.health.ok?'● 采集服务正常':'● 采集异常';$('serviceState').className='status-pill '+(state.health.ok?'good':'bad');if(state.view==='quality')renderQuality();}catch(e){$('serviceState').textContent='服务连接失败';$('serviceState').className='status-pill bad';error(e.message);}}
+async function refreshHealth(){try{state.health=await api('health');renderServiceState();if(state.view==='quality')renderQuality();}catch(e){state.health=null;$('serviceState').textContent='服务连接失败';$('serviceState').className='status-pill bad';error(e.message);}}
 
 document.addEventListener('click',async e=>{
   const b=e.target.closest('button');if(!b)return;

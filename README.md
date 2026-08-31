@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # CTMC CGI 车载数据服务
 
 线上入口：[quality-ctmc.cloud/vehicle/](https://quality-ctmc.cloud/vehicle/)，也可从质检主页第 05 个业务模块进入。使用现有平台账号；管理员默认新增 vehicle 权限，其他账号由用户管理显式授权。
@@ -34,7 +33,7 @@ CGI 设备 → 原有 TCP :9000 → 原始日志（原服务完全保留）
 
 ## 运行与验证
 
-需要 Python 3.11+。服务端无第三方 Python 依赖，前端 Leaflet 1.9.4、ECharts 5.6.0 静态文件已固定版本，许可证保存在 `static/vendor/`。
+需要 Python 3.11+。服务端无第三方 Python 依赖，前端 Leaflet 1.9.4、ECharts 6.1.0 静态文件已固定版本，许可证保存在 `static/vendor/`；静态文件 SHA-256 记录于 `docs/vendor-manifest.json`。
 
 ```bash
 python3 -m unittest discover -s tests -v
@@ -52,7 +51,7 @@ SN 是逻辑身份，不是密码鉴权。当前接收器为公网原始 TCP，�
 
 原始坐标按 GNSS 默认 WGS84 使用；高德底图覆盖物统一在前端转换为 GCJ-02 展示，数据库保留原始 WGS84，过滤后的导出和里程计算亦使用 WGS84。显示转换不用于厘米级测量。详见 [大陆底图修复](docs/大陆底图修复.md)。加表单位 g、陀螺单位 °/s 依据手册同类 IMU/CAN 定义及实际静态重力量级采用；上线运输业务前应结合设备输出配置和安装标定复核。
 
-地图瓦片使用 OpenStreetMap 公开服务，显示署名并按正常视口加载，无预下载。受外网可用性和服务政策限制；正式规模部署应换为有服务保障的合规地图服务，并明确坐标转换。
+地图瓦片使用高德公开道路底图，显示署名并按正常视口加载，无预下载。受外网可用性和服务政策限制；正式规模部署应换为有服务保障的合规地图服务，并继续明确 WGS84 → GCJ-02 只属于显示边界。
 
 本系统为工况分析试运行版，不是 JT/T 808 协议终端或通过 JT/T 796 认证的监管平台。车辆业务阈值是工程起始值，不是法规统一阈值。没有司机身份/CAN/油耗/道路限速输入时，不输出疲劳驾驶、油耗或真实道路违法结论；没有 ISO 2631 频率加权与合适安装条件时，不输出人体振动舒适度等级。
 
@@ -62,4 +61,4 @@ SN 是逻辑身份，不是密码鉴权。当前接收器为公网原始 TCP，�
 
 离线解析与在线导出使用同一 CSV 字段契约。单文件只允许一台设备、最长 31 天、最多 3,000 万行；原始 CSV 上限 12 GiB，CSV.GZ 上限 1 GiB。10 天约 864 万行，建议先用 `gzip 原文件.csv` 得到 `.csv.gz` 再上传。服务从 nginx 到 Python 解析器全程流式读取，以最多约 1,600 个自适应源桶控制内存；10 天采用 10 分钟源桶，页面仍输出至多 360 个展示桶并保留各字段最小/最大包络。大文件解析可能持续数分钟，期间不要关闭页面。上传结果只存在于该次响应及当前浏览器页面。
 
-行业与技术参考：[动态监督管理办法](https://xxgk.mot.gov.cn/jigou/fgs/202202/t20220224_3642995.html)、[标准符合性审查规范](https://xxgk.mot.gov.cn/2020/jigou/ysfws/202006/t20200623_3315356.html)、[Leaflet](https://leafletjs.com/reference.html)、[ECharts](https://echarts.apache.org/handbook/en/concepts/dataset/)、[OSM 瓦片政策](https://operations.osmfoundation.org/policies/tiles/)。协议原文为用户提供的 CGI-430 V2.4.4 手册 §1.4（第 5–12 页）。
+行业与技术参考：[动态监督管理办法](https://xxgk.mot.gov.cn/jigou/fgs/202202/t20220224_3642995.html)、[标准符合性审查规范](https://xxgk.mot.gov.cn/2020/jigou/ysfws/202006/t20200623_3315356.html)、[Leaflet](https://leafletjs.com/reference.html)、[ECharts](https://echarts.apache.org/handbook/en/concepts/dataset/)。协议原文为用户提供的 CGI-430 V2.4.4 手册 §1.4（第 5–12 页）。

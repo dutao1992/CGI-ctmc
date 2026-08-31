@@ -12,6 +12,8 @@ UMask=0077
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 NoNewPrivileges=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
@@ -19,8 +21,11 @@ PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
 RestrictSUIDSGID=true
 RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
 # Required only to inspect the root-owned receiver's /proc/<pid>/fd safely.
 CapabilityBoundingSet=CAP_SYS_PTRACE
 ReadWritePaths=/srv/ctmc-vehicle/data /srv/chcnav-cgi430/logs/raw

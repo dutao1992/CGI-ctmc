@@ -71,7 +71,7 @@ async function appHarness(){
       return {ok:true,json:async()=>data};}
   };
   vm.createContext(context);
-  vm.runInContext(fs.readFileSync(require.resolve('../static/app.js'),'utf8')+'\nthis.appTest={renderMap,renderOverview,selectTime,locateEvent,buildChart,renderVibration,query,chooseRange,setRange,setView,loadDevices,loadQuarantine,stationaryRange,renderFilterSummary,renderOfflineAnalysis,chooseOfflineFile,analyzeOfflineFile,state,setData(d){state.data=d;state.device={id:"SN1",rules:{}};},setOfflineData(d){state.offlineData=d;}};',context);
+  vm.runInContext(fs.readFileSync(require.resolve('../static/app.js'),'utf8')+'\nthis.appTest={renderMap,renderOverview,selectTime,locateEvent,buildChart,renderVibration,renderServiceState,query,chooseRange,setRange,setView,loadDevices,loadQuarantine,stationaryRange,renderFilterSummary,renderOfflineAnalysis,chooseOfflineFile,analyzeOfflineFile,state,setData(d){state.data=d;state.device={id:"SN1",rules:{}};},setOfflineData(d){state.offlineData=d;}};',context);
   await new Promise(resolve=>setImmediate(resolve));
   const app=context.appTest;
   return {app,calls,node,shortcuts,interval:()=>interval(),respond(fn){respond=fn;},offlineRespond(fn){offlineRespond=fn;},offlineUpload:()=>offlineUpload,setNow(value){now=value;},setPoint(p){point=p;},
@@ -128,6 +128,19 @@ test('adjacent bounded and active stationary facts cover a selected range withou
   assert.equal(app.stationaryRange(scopes,100,500),true);
   assert.equal(app.stationaryRange(scopes,90,500),false);
   assert.equal(app.stationaryRange([scopes[0],scopes[2]],100,500),false);
+});
+
+test('top status separates parser health from stale or fresh device telemetry',async()=>{
+  const h=await appHarness();h.setNow(1787750400000);h.app.state.health={ok:true};
+  h.setDevices([deviceFixture('SN1',1787740000)]);h.app.renderServiceState();
+  assert.match(h.node('serviceState').textContent,/服务正常 · 设备无新数据/);
+  assert.match(h.node('serviceState').className,/warn/);
+  h.setDevices([deviceFixture('SN1',1787750380)]);h.app.renderServiceState();
+  assert.match(h.node('serviceState').textContent,/采集与设备数据正常/);
+  assert.match(h.node('serviceState').className,/good/);
+  h.app.state.health={ok:false};h.app.renderServiceState();
+  assert.match(h.node('serviceState').textContent,/采集服务异常/);
+  assert.match(h.node('serviceState').className,/bad/);
 });
 
 test('10 Hz vibration spotlight renders bounded waveform, RMS and 0-4 Hz spectrum without overstating capability',async()=>{

@@ -12,6 +12,8 @@ UMask=0077
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 NoNewPrivileges=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
@@ -19,8 +21,11 @@ PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
 RestrictSUIDSGID=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
 CapabilityBoundingSet=
 ReadWritePaths=/srv/ctmc-vehicle/data
 ReadOnlyPaths=/srv/chcnav-cgi430/logs/raw

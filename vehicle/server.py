@@ -28,6 +28,11 @@ def create_handler(store, raw_root, static_root, auth_url):
     query_slots = threading.BoundedSemaphore(2)
     class Handler(BaseHTTPRequestHandler):
         server_version = 'CTMC-Vehicle/1.0'
+        sys_version = ''
+
+        def version_string(self):
+            # Do not disclose the patch-level Python runtime to unauthenticated clients.
+            return self.server_version
 
         def log_message(self, fmt, *args):
             # Avoid query/cookie disclosure in access logs.
@@ -49,7 +54,10 @@ def create_handler(store, raw_root, static_root, auth_url):
             self.send_header('X-Content-Type-Options','nosniff')
             self.send_header('Referrer-Policy','strict-origin-when-cross-origin')
             self.send_header('X-Frame-Options','SAMEORIGIN')
-            self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://webrd01.is.autonavi.com https://webrd02.is.autonavi.com https://webrd03.is.autonavi.com https://webrd04.is.autonavi.com; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'")
+            self.send_header('Permissions-Policy','camera=(), microphone=(), geolocation=(), payment=(), usb=()')
+            self.send_header('Cross-Origin-Resource-Policy','same-origin')
+            self.send_header('X-Permitted-Cross-Domain-Policies','none')
+            self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://webrd01.is.autonavi.com https://webrd02.is.autonavi.com https://webrd03.is.autonavi.com https://webrd04.is.autonavi.com; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'")
             for key,value in headers.items():
                 self.send_header(key,value)
             self.end_headers()
@@ -66,16 +74,31 @@ def create_handler(store, raw_root, static_root, auth_url):
             except (URLError,ValueError,TimeoutError):
                 self.send(503,{'error':'统一认证暂不可用，请稍后重试'})
                 return None
+            if not isinstance(data,dict):
+                self.send(503,{'error':'统一认证返回格式无效，请稍后重试'})
+                return None
             user = data.get('user')
             if not user:
                 self.send(401,{'error':'登录已失效，请返回质检主页登录'})
                 return None
-            if 'vehicle' not in user.get('permissions',[]):
+            permissions = user.get('permissions') if isinstance(user,dict) else None
+            claims_valid = (isinstance(user,dict) and
+                            isinstance(user.get('username'),str) and bool(user['username'].strip()) and
+                            isinstance(user.get('display_name'),str) and bool(user['display_name'].strip()) and
+                            isinstance(permissions,list) and all(isinstance(item,str) for item in permissions))
+            if not claims_valid:
+                self.send(503,{'error':'统一认证返回身份信息无效，请稍后重试'})
+                return None
+            if 'vehicle' not in permissions:
                 self.send(403,{'error':'当前账号没有车载数据服务权限，请联系管理员授予'})
                 return None
             if write:
                 csrf = self.headers.get('X-CSRF-Token','')
-                if not csrf or not hmac.compare_digest(csrf,str(data.get('csrf_token',''))):
+                token = data.get('csrf_token')
+                if not isinstance(token,str) or not token:
+                    self.send(503,{'error':'统一认证未返回有效安全令牌，请刷新后重试'})
+                    return None
+                if not csrf or not hmac.compare_digest(csrf,token):
                     self.send(403,{'error':'安全校验失败，请刷新页面'})
                     return None
                 if user.get('role') != 'ADMIN' and 'user_admin' not in user.get('permissions',[]):
@@ -104,7 +127,7 @@ def create_handler(store, raw_root, static_root, auth_url):
             try:
                 route,args = self.arguments()
                 if route == '/healthz':
-                    health = store.health()
+                    health = store.probe()
                     self.send(200 if health['ok'] else 503, {'ok':health['ok'],'heartbeat':health['heartbeat']})
                     return
                 user = self.authorize()
@@ -297,7 +320,12 @@ class BoundedServer(ThreadingHTTPServer):
             request.sendall(b'HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
             request.close()
             return
-        super().process_request(request,address)
+        try:
+            super().process_request(request,address)
+        except BaseException:
+            self.slots.release()
+            self.shutdown_request(request)
+            raise
     def process_request_thread(self,*args):
         try:
             super().process_request_thread(*args)
@@ -323,16 +351,22 @@ def main():
         print(json.dumps(store.health(),ensure_ascii=False))
         return
     def ingest():
+        idle_delay = 1.0
         while not stop.is_set():
             try:
                 if not Path(args.raw).is_dir():
                     raise OSError('原始接收目录不可访问')
-                ingestor.scan()
+                inserted = ingestor.scan()
+                # Preserve one-second latency while a real telemetry stream is
+                # active; back off boundedly when only idle/public probe files
+                # are arriving so a large raw tree does not burn CPU needlessly.
+                idle_delay = 1.0 if inserted else min(5.0,idle_delay+1.0)
             except Exception as e:
                 ingestor.states.clear()
                 logging.exception('ingestion failed')
                 store.meta('error',str(e)[:200])
-            stop.wait(1)
+                idle_delay = 5.0
+            stop.wait(idle_delay)
     threading.Thread(target=ingest,daemon=True).start()
     handler = create_handler(store,args.raw,Path(__file__).resolve().parent.parent/'static',args.auth)
     server = BoundedServer(('127.0.0.1',args.port),handler)

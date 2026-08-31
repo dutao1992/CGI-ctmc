@@ -116,6 +116,10 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.store.health()['counters']['duplicates'],1)
         with self.store.connect() as c:p=c.execute('SELECT * FROM points').fetchone()
         self.assertEqual(p['source_offset'],6)
+    def test_scan_reports_new_points_then_idles(self):
+        self.file.write_bytes(LIVE[0]+b'\r\n')
+        self.assertEqual(self.ing.scan(),1)
+        self.assertEqual(self.ing.scan(),0)
     def test_multi_device_isolation(self):
         self.ingest(LIVE[0],altered(sn='OTHER001'))
         ds=self.store.devices();self.assertEqual(len(ds),2)
@@ -251,8 +255,12 @@ class ApiTests(unittest.TestCase):
             def do_GET(s):
                 cookie=s.headers.get('Cookie','')
                 role='ADMIN' if cookie=='admin' else 'USER'
-                user={'username':'tester','display_name':'Test','role':role,'permissions':[] if cookie=='denied' else ['vehicle']} if cookie in ('admin','reader','denied') else None
-                data=json.dumps({'user':user,'csrf_token':'test-csrf'}).encode()
+                accepted=('admin','reader','denied','string-permissions','admin-no-csrf')
+                user={'username':'tester','display_name':'Test','role':'ADMIN' if cookie=='admin-no-csrf' else role,
+                      'permissions':('vehicle' if cookie=='string-permissions' else [] if cookie=='denied' else ['vehicle'])} if cookie in accepted else None
+                payload={'user':user}
+                if cookie!='admin-no-csrf':payload['csrf_token']='test-csrf'
+                data=json.dumps(payload).encode()
                 s.send_response(200);s.end_headers();s.wfile.write(data)
             def log_message(self,*args):pass
         self.auth=HTTPServer(('127.0.0.1',0),Auth);threading.Thread(target=self.auth.serve_forever,daemon=True).start()
@@ -273,10 +281,22 @@ class ApiTests(unittest.TestCase):
     def test_api_access_boundaries(self):
         self.assertEqual(self.request('/api/devices')[0],401)
         self.assertEqual(self.request('/api/devices','denied')[0],403)
+        self.assertEqual(self.request('/api/devices','string-permissions')[0],503)
         status,body=self.request('/api/devices','reader');self.assertEqual(status,200);self.assertEqual(json.loads(body)['devices'][0]['id'],'6094510')
         self.assertEqual(self.request('/api/devices/6094510','reader',{'name':'No'},'test-csrf')[0],403)
         self.assertEqual(self.request('/api/devices/6094510','admin',{'name':'No'})[0],403)
+        self.assertEqual(self.request('/api/devices/6094510','admin-no-csrf',{'name':'No'},'None')[0],503)
         self.assertEqual(self.request('/api/devices/6094510','admin',{'name':'Verified'},'test-csrf')[0],200)
+
+    def test_health_probe_is_lightweight_and_security_headers_do_not_disclose_python(self):
+        from unittest.mock import patch
+        with patch.object(self.store,'health',side_effect=AssertionError('detailed health must not run')):
+            with urlopen(self.url+'/healthz') as response:
+                self.assertEqual(response.status,200)
+                self.assertEqual(response.headers['Server'],'CTMC-Vehicle/1.0')
+                self.assertIn('camera=()',response.headers['Permissions-Policy'])
+                self.assertEqual(response.headers['Cross-Origin-Resource-Policy'],'same-origin')
+                self.assertIn("form-action 'self'",response.headers['Content-Security-Policy'])
     def test_point_and_export_and_traversal(self):
         t=parse(LIVE[0])['t'];q=f'?device=6094510&start={t-1}&end={t+1}'
         status,body=self.request('/api/query'+q,'reader');self.assertEqual(status,200);self.assertEqual(json.loads(body)['total'],1)
@@ -585,7 +605,7 @@ class RetentionTests(unittest.TestCase):
         self.raw = self.raw.resolve()
         self.now = time.time()
         self.day = datetime.datetime.fromtimestamp(self.now-5*86400,datetime.timezone.utc).date().isoformat()
-        self.old = self.raw/self.day/'old.log';self.old.parent.mkdir()
+        self.old = self.raw/self.day/'old.log';self.old.parent.mkdir(exist_ok=True)
         self.disk_pct = 81
         self.opened = set()
         self.ret = Retention(self.store,self.raw,usage=lambda _:dict(used_pct=self.disk_pct,used_bytes=1000000,available_bytes=100000),opened=lambda:self.opened,clock=lambda:self.now)
@@ -747,7 +767,9 @@ class DeployPreparationTests(unittest.TestCase):
         self.assertTrue(result['skipped']);self.assertFalse(backup.exists())
         result=rollup_prepare.prepare(self.store.path)
         self.assertTrue(result['skipped']);self.assertEqual(result['raw_points'],1)
+        self.assertEqual(result['quick_check'],'not_run_current_rollups')
         self.assertTrue(all(level['ready'] for level in result['verified_levels']))
+        self.assertEqual(rollup_prepare.prepare(self.store.path,verify_current=True)['quick_check'],'ok')
 
     def test_invalid_rollup_version_forces_rebuild(self):
         self.ingest(LIVE[0]);rollup_prepare=self.module('prepare-rollups.py')
@@ -755,6 +777,25 @@ class DeployPreparationTests(unittest.TestCase):
         result=rollup_prepare.prepare(self.store.path)
         self.assertFalse(result.get('skipped',False))
         self.assertTrue(all(not level['invalid_buckets'] and level['points']==1 for level in result['verified_levels']))
+
+    def test_device_counter_drift_fails_closed_without_rebuilding(self):
+        self.ingest(LIVE[0]);rollup_prepare=self.module('prepare-rollups.py')
+        with self.store.connect() as c:
+            before=c.execute('SELECT payload FROM point_rollups WHERE bucket_s=60').fetchone()[0]
+            c.execute('UPDATE devices SET point_count=0')
+        with self.assertRaisesRegex(ValueError,'\u8bbe\u5907\u7d2f\u8ba1\u70b9\u6570\u4e0d\u4e00\u81f4'):
+            rollup_prepare.prepare(self.store.path)
+        with self.store.connect() as c:
+            self.assertEqual(c.execute('SELECT payload FROM point_rollups WHERE bucket_s=60').fetchone()[0],before)
+
+    def test_systemd_units_include_supported_process_isolation(self):
+        deploy=Path(__file__).parent.parent/'deploy'
+        for name in ('ctmc-vehicle.service','ctmc-vehicle-retention.service'):
+            unit=(deploy/name).read_text()
+            for setting in ('LockPersonality=true','MemoryDenyWriteExecute=true',
+                            'RestrictNamespaces=true','RestrictRealtime=true',
+                            'SystemCallArchitectures=native'):
+                self.assertIn(setting,unit)
 
     def test_offline_proxy_route_is_narrow_and_idempotent(self):
         configure=self.module('configure-offline-proxy.py')

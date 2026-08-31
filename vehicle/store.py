@@ -278,6 +278,15 @@ class Store:
                 out.append(d)
         return out
 
+    def probe(self):
+        """Cheap liveness/readiness probe; detailed health remains an authenticated API."""
+        with self.connect() as c:
+            meta = {r['key']: json.loads(r['value']) for r in c.execute(
+                "SELECT key,value FROM meta WHERE key IN ('heartbeat','error')")}
+        heartbeat = meta.get('heartbeat',0)
+        return dict(ok=bool(heartbeat and time.time()-heartbeat < 30 and not meta.get('error')),
+                    heartbeat=heartbeat,error=meta.get('error'))
+
     def health(self):
         with self.connect() as c:
             meta = {r['key']: json.loads(r['value']) for r in c.execute('SELECT * FROM meta')}
@@ -609,10 +618,12 @@ class Ingestor:
     def scan(self):
         with self.store.ingestion_lock(blocking=False) as acquired:
             if acquired:
-                self._scan()
+                return self._scan()
+        return 0
 
     def _scan(self):
         # Full discovery supports late/reconnected sessions and historical backfill. Never follows symlinks.
+        inserted_total = 0
         with self.store.connect() as c:
             retired = {r[0] for r in c.execute('SELECT path FROM retention_files')}
             self.quality_contexts = quality.contexts(c)
@@ -665,6 +676,7 @@ class Ingestor:
                             inserted = self._point(c,p,stat)
                             counts['points' if inserted else 'duplicates'] += 1
                             if inserted:
+                                inserted_total += 1
                                 touched[p['device_id']].add(bucket_start(p['t']))
                         else:
                             counts['auxiliary_ascii'] += 1
@@ -681,5 +693,7 @@ class Ingestor:
                 self.store.clear_query_cache(sn,min(buckets))
             if offset+len(data) >= stat.st_size:
                 self.file_cache[rel] = fingerprint
-        self.store.meta('heartbeat',time.time())
-        self.store.meta('error',None)
+        with self.store.connect() as c:
+            c.execute('INSERT OR REPLACE INTO meta VALUES (?,?)',('heartbeat',json.dumps(time.time())))
+            c.execute('INSERT OR REPLACE INTO meta VALUES (?,?)',('error',json.dumps(None)))
+        return inserted_total
