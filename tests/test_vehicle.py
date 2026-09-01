@@ -82,6 +82,21 @@ class VibrationTests(unittest.TestCase):
         self.assertAlmostEqual(result['metrics']['rms_g'],.08/math.sqrt(2),delta=.002)
         self.assertLessEqual(result['usable_frequency_hz'][1],4)
         self.assertEqual(len(result['time']),600)
+        self.assertEqual(result['selection']['method'],'筛选时段内去趋势动态 RMS 最大的连续 60 秒窗口')
+
+    def test_spectrum_selects_highest_amplitude_window_instead_of_terminal_window(self):
+        samples=[]
+        for index in range(2_400):
+            amplitude=.01 if index<700 or index>=1_700 else .16
+            value=amplitude*math.sin(2*math.pi*1.5*index/10)
+            samples.append(dict(t=1_000+index/10,ax=1+value,ay=0,az=0))
+        result=analyze_vibration(samples)
+        self.assertTrue(result['available'])
+        self.assertGreaterEqual(result['start'],1_070)
+        self.assertLess(result['start'],1_080)
+        self.assertGreaterEqual(result['duration_s'],59.8)
+        self.assertGreater(result['selection']['score_g'],.08)
+        self.assertAlmostEqual(result['metrics']['dominant_hz'],1.5,delta=.03)
 
     def test_vibration_refuses_short_or_gapped_samples(self):
         samples=[dict(t=1_000+index/10,ax=1,ay=0,az=0) for index in range(90)]
@@ -174,6 +189,23 @@ class StoreTests(unittest.TestCase):
         self.assertGreaterEqual(len(vibration['range']['series']),50)
         self.assertAlmostEqual(vibration['range']['metrics']['mean_g'],1.0,delta=.01)
         self.assertEqual(self.store.health()['aggregation']['raw_points'],before)
+
+    def test_long_query_spectrum_uses_highest_amplitude_rollup_candidate(self):
+        point=parse(LIVE[0]);tow=point['tow'];frames=[]
+        for index in range(600):
+            value=1+.12*math.sin(2*math.pi*1.5*index/10)
+            frames.append(altered(tow=tow+index/10,ax=value,ay=0,az=0))
+        for index in range(600):
+            value=1+.01*math.sin(2*math.pi*1.5*index/10)
+            frames.append(altered(tow=tow+8*3600+index/10,ax=value,ay=0,az=0))
+        self.ingest(*frames)
+        start=parse(frames[0])['t']-.1;end=parse(frames[-1])['t']+.1
+        out=self.store.query('6094510',start,end,bins=360)
+        vibration=out['vibration']
+        self.assertTrue(vibration['available'])
+        self.assertGreaterEqual(vibration['selection']['rollup_candidates'],2)
+        self.assertLess(vibration['start'],parse(frames[600])['t'])
+        self.assertGreater(vibration['metrics']['rms_g'],.07)
     def test_long_query_uses_verified_rollups_preserves_peak_and_caches(self):
         tow=parse(LIVE[0])['tow']
         frames=[]

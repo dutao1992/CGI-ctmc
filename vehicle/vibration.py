@@ -11,7 +11,6 @@ from statistics import median
 
 EXPECTED_HZ = 10.0
 MAX_WINDOW_S = 60.0
-LOOKBACK_S = 180.0
 MIN_SAMPLES = 100
 MAX_FREQUENCY_HZ = 4.0
 MAX_GAP_S = 0.16
@@ -76,18 +75,83 @@ def _spectrum(values, sample_hz, usable_max_hz):
     return rows
 
 
-def analyze(samples):
-    """Return a compact time waveform, 1 s RMS envelope and Hann FFT."""
-    candidates = [segment for segment in _segments(samples) if len(segment) >= MIN_SAMPLES]
-    if not candidates:
-        return unavailable('没有不少于 10 秒的连续三轴比力原始窗；不对缺测数据插值或补零', len(samples))
-    segment = candidates[-1]
+def _sample_hz(segment):
     intervals = [right['t'] - left['t'] for left, right in zip(segment, segment[1:]) if right['t'] > left['t']]
-    sample_hz = 1.0 / median(intervals) if intervals else 0.0
-    if not 8.0 <= sample_hz <= 10.5:
-        return unavailable(f'连续窗采样率约 {sample_hz:.2f} Hz，不满足 10 Hz 低频分析前提', len(segment))
-    maximum_samples = max(MIN_SAMPLES, int(round(sample_hz * MAX_WINDOW_S)) + 1)
-    segment = segment[-maximum_samples:]
+    return 1.0 / median(intervals) if intervals else 0.0
+
+
+def _window_rms(prefix_values, prefix_times_values, start, end, sample_count):
+    """Return the exact linear-detrended RMS for one fixed-size window.
+
+    Prefix sums keep the full-range search linear in the number of samples;
+    the final FFT is still calculated only for the winning 60-second window.
+    """
+    sum_values = prefix_values[end] - prefix_values[start]
+    sum_squares = prefix_values[sample_count + end] - prefix_values[sample_count + start]
+    sum_time_values = prefix_times_values[end] - prefix_times_values[start]
+    n = end - start
+    sum_time = n * start + n * (n - 1) / 2
+    sum_time_squares = n * start * start + 2 * start * n * (n - 1) / 2 + n * (n - 1) * (2 * n - 1) / 6
+    centered_time_squares = sum_time_squares - sum_time * sum_time / n
+    centered_time_values = sum_time_values - sum_time * sum_values / n
+    centered_values_squares = sum_squares - sum_values * sum_values / n
+    residual_squares = centered_values_squares
+    if centered_time_squares > 0:
+        residual_squares -= centered_time_values * centered_time_values / centered_time_squares
+    return math.sqrt(max(0.0, residual_squares) / n)
+
+
+def _best_window(segment, sample_hz):
+    # A 10 Hz source bucket contains 600 samples for a nominal 60-second
+    # window (the observed span is 59.9 s when both endpoints are included).
+    window_samples = max(MIN_SAMPLES, int(round(sample_hz * MAX_WINDOW_S)))
+    if len(segment) < window_samples:
+        return None
+    magnitudes = [math.sqrt(item['ax'] ** 2 + item['ay'] ** 2 + item['az'] ** 2) for item in segment]
+    # The first prefix stores sums and the second stores sums of squares.  A
+    # separate time-value prefix is enough because the sample index is the
+    # equally spaced regression axis.
+    prefix_values = [0.0]
+    prefix_squares = [0.0]
+    prefix_time_values = [0.0]
+    for index, value in enumerate(magnitudes):
+        prefix_values.append(prefix_values[-1] + value)
+        prefix_squares.append(prefix_squares[-1] + value * value)
+        prefix_time_values.append(prefix_time_values[-1] + index * value)
+    # Keep sums and sums-of-squares in one flat array to make the hot loop
+    # explicit and avoid creating a tuple for every candidate window.
+    combined = prefix_values + prefix_squares
+    best = None
+    for start in range(0, len(segment) - window_samples + 1):
+        end = start + window_samples
+        score = _window_rms(combined, prefix_time_values, start, end, len(prefix_values))
+        if best is None or score > best[0] + 1e-12:
+            best = (score, start, window_samples)
+    return best
+
+
+def analyze(samples):
+    """Return the highest-amplitude continuous 60-second window and its FFT."""
+    candidates = []
+    for segment in _segments(samples):
+        if len(segment) < MIN_SAMPLES:
+            continue
+        sample_hz = _sample_hz(segment)
+        if not 8.0 <= sample_hz <= 10.5:
+            continue
+        best = _best_window(segment, sample_hz)
+        if best:
+            candidates.append((best[0], segment, sample_hz, best[1], best[2]))
+    if not candidates:
+        usable = [segment for segment in _segments(samples) if len(segment) >= MIN_SAMPLES]
+        if not usable:
+            return unavailable('没有不少于 10 秒的连续三轴比力原始窗；不对缺测数据插值或补零', len(samples))
+        sample_hz = _sample_hz(max(usable, key=len))
+        if not 8.0 <= sample_hz <= 10.5:
+            return unavailable(f'连续窗采样率约 {sample_hz:.2f} Hz，不满足 10 Hz 低频分析前提', len(max(usable, key=len)))
+        return unavailable('筛选时段没有不少于 60 秒的连续三轴比力窗口；不对缺测数据插值或补零', len(samples))
+    selection_rms, source_segment, sample_hz, window_start, window_samples = max(candidates, key=lambda item: item[0])
+    segment = source_segment[window_start:window_start + window_samples]
     times = [item['t'] - segment[0]['t'] for item in segment]
     magnitudes = [math.sqrt(item['ax'] ** 2 + item['ay'] ** 2 + item['az'] ** 2) for item in segment]
     residual = _linear_residual(magnitudes, times)
@@ -127,7 +191,13 @@ def analyze(samples):
             'dominant_hz': dominant[0],
             'dominant_amplitude_g': dominant[1],
         },
-        'method': '三轴比力合成模长 -> 线性去趋势 -> 1 秒滑动 RMS；频谱使用 Hann 窗单边幅值 FFT',
-        'source': '过滤后的连续 GPCHC(X) 原始采样；无插值、无补零、无新增落盘',
+        'selection': {
+            'method': '筛选时段内去趋势动态 RMS 最大的连续 60 秒窗口',
+            'metric': '线性去趋势动态 RMS',
+            'score_g': round(selection_rms, 7),
+            'candidate_windows': sum(max(0, len(item[1]) - item[4] + 1) for item in candidates),
+        },
+        'method': '筛选时段候选连续窗口 -> 选择动态 RMS 最大的 60 秒窗 -> 线性去趋势 -> 1 秒滑动 RMS；频谱使用 Hann 窗单边幅值 FFT',
+        'source': '筛选时段内过滤后的连续 GPCHC(X) 原始采样；无插值、无补零、无新增落盘',
         'capability': '10 Hz 仅用于 0-4 Hz 低频载体振动观察；设备端抗混叠特性未核验，频谱仅作趋势，不用于轴承、齿轮等高频故障诊断',
     }

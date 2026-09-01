@@ -32,7 +32,7 @@ test('a successful tile cannot hide another tile failure; recovery/unload clears
 });
 
 async function appHarness(){
-  const nodes=new Map(),calls={lines:[],circles:[],moves:[],centers:[],pans:[],charts:new Map(),options:new Map(),queries:[],groups:[]};
+  const nodes=new Map(),calls={lines:[],circles:[],moves:[],centers:[],pans:[],charts:new Map(),options:new Map(),queries:[],groups:[],connections:[]};
   const handlers=new Map(),documentHandlers=new Map(),instances=new Map();
   const node=id=>{
     if(!nodes.has(id)){
@@ -56,7 +56,7 @@ async function appHarness(){
     polyline(p){calls.lines.push(p.map(x=>Array.from(x)));return {addTo(g){g.layers.push(this);return this;}};},
     circleMarker(p){calls.circles.push(Array.from(p));return {addTo(g){g.layers?.push(this);return this;},bindTooltip(){return this;},on(){return this;},setLatLng(x){calls.moves.push(Array.from(x));return this;}};}
   };
-  const echarts={getInstanceByDom:el=>instances.get(el.id),init(el){const chart={setOption(o,replace){calls.options.set(el.id,replace?o:{...calls.options.get(el.id),...o});},clear(){calls.options.set(el.id,{});},off(){},on(type,fn){calls.charts.set(type,fn);},resize(){},getZr(){return {off(){},on(){}};}};instances.set(el.id,chart);return chart;}};
+  const echarts={getInstanceByDom:el=>instances.get(el.id),connect:group=>calls.connections.push(group),init(el){const chart={setOption(o,replace){calls.options.set(el.id,replace?o:{...calls.options.get(el.id),...o});},clear(){calls.options.set(el.id,{});},off(){},on(type,fn){calls.charts.set(type,fn);},resize(){},getZr(){return {off(){},on(){}};}};instances.set(el.id,chart);return chart;}};
   let now=1787750400000,devices=[],respond=async params=>queryFixture(params),offlineRespond=async()=>({}),offlineUpload=null,point=null,interval;
   class Clock extends Date{static now(){return now;}}
   const context={console,Date:Clock,CTMCMap,L,echarts,URLSearchParams,Event:class{constructor(type){this.type=type;}},
@@ -83,7 +83,7 @@ function deviceFixture(id='SN1',last=1787740797.9){return {id,name:id,last_t:las
 function queryFixture(params,total=3){
   const start=+params.get('start'),end=+params.get('end');
   const t=end-2,track=total?[{t,lat:31.2456,lon:121.616,speed:.1}]:[];
-  const vibration=total?{available:true,start:t-1,end:t,samples:11,sample_hz:10,duration_s:1,frequency_resolution_hz:.1,usable_frequency_hz:[.2,4],time:[[t*1000-1000,.01,null],[t*1000,.02,.015]],spectrum:[[1,.01],[2,.03]],metrics:{rms_g:.015,peak_g:.02,peak_to_peak_g:.03,crest_factor:1.33,dominant_hz:2,dominant_amplitude_g:.03},range:{available:true,start,end,samples:total,buckets:1,series_fields:['timestamp_ms','rms_g','peak_g','mean_g','min_g','max_g','count'],series:[[start*1000,.011,.02,1,.98,1.02,total]],metrics:{rms_g:.011,peak_g:.02,peak_to_peak_g:.04,mean_g:1},capability:'10 Hz 仅用于 0–4 Hz 低频载体振动观察'},method:'测试处理链',source:'测试连续原始窗',capability:'10 Hz 仅用于 0–4 Hz 低频载体振动观察'}:{available:false,reason:'所选时段无采样',range:{available:false,reason:'所选时段无采样',capability:'10 Hz 仅用于 0–4 Hz 低频载体振动观察'},capability:'10 Hz 仅用于 0–4 Hz 低频载体振动观察'};
+  const vibration=total?{available:true,start:t-1,end:t,samples:11,sample_hz:10,duration_s:1,frequency_resolution_hz:.1,usable_frequency_hz:[.2,4],time:[[t*1000-1000,.01,null],[t*1000,.02,.015]],spectrum:[[1,.01],[2,.03]],metrics:{rms_g:.015,peak_g:.02,peak_to_peak_g:.03,crest_factor:1.33,dominant_hz:2,dominant_amplitude_g:.03},selection:{method:'筛选时段内去趋势动态 RMS 最大的连续 60 秒窗口',metric:'线性去趋势动态 RMS',score_g:.03,candidate_windows:1},range:{available:true,start,end,samples:total,buckets:1,series_fields:['timestamp_ms','rms_g','peak_g','mean_g','min_g','max_g','count'],series:[[start*1000,.011,.02,1,.98,1.02,total]],metrics:{rms_g:.011,peak_g:.02,peak_to_peak_g:.04,mean_g:1},capability:'10 Hz 仅用于 0–4 Hz 低频载体振动观察'},method:'测试处理链',source:'测试连续原始窗',capability:'10 Hz 仅用于 0–4 Hz 低频载体振动观察'}:{available:false,reason:'所选时段无采样',range:{available:false,reason:'所选时段无采样',capability:'10 Hz 仅用于 0–4 Hz 低频载体振动观察'},capability:'10 Hz 仅用于 0–4 Hz 低频载体振动观察'};
   return {device_id:params.get('device'),start,end,total,track,events:{total:0,items:[]},segments:[],summary:{first_t:total?t:null,last_t:total?t:null,distance_km:0,moving_s:0,max_kmh:.36,fixed_pct:100,gap_count:0},series:{speed:total?[[t*1000,.1,.1,.1]]:[],gx:total?[[t*1000,.2,.2,.2]]:[]},vibration,gaps:[],aggregation:{buckets:total?1:0,bucket_s:(end-start)/700},quality:{version:1,total,anomaly_samples:0,status_samples:0,unavailable_samples:0,pending_samples:0,contexts:[],excluded_fields:{},reasons:[]}};
 }
 function offlineFixture(){
@@ -155,37 +155,29 @@ test('top status separates parser health from stale or fresh device telemetry',a
   assert.match(h.node('serviceState').className,/bad/);
 });
 
-test('10 Hz vibration spotlight renders bounded waveform, RMS and 0-4 Hz spectrum without overstating capability',async()=>{
-  const h=await appHarness();h.setDevices([deviceFixture()]);h.app.setView('signals');await h.clickRange(900);
-  const time=h.calls.options.get('signalVibrationTimeChart'),spectrum=h.calls.options.get('signalVibrationSpectrumChart');
+test('overview vibration uses the selected range, links the speed axis and keeps the spectrum on the max-amplitude window',async()=>{
+  const h=await appHarness();h.setDevices([deviceFixture()]);h.app.setView('overview');await h.clickRange(900);
+  const speed=h.calls.options.get('speedChart'),time=h.calls.options.get('overviewVibrationTimeChart'),spectrum=h.calls.options.get('overviewVibrationSpectrumChart');
   assert.equal(time.xAxis.min,h.app.state.data.start*1000);assert.equal(time.xAxis.max,h.app.state.data.end*1000);
   assert.equal(time.series[0].data[0][1],.011);assert.equal(time.series[1].data[0][1],.02);
-  assert.equal(time.tooltip.renderMode,'html');assert.equal(time.tooltip.confine,true);
+  assert.equal(time.tooltip.renderMode,'html');assert.equal(time.tooltip.confine,true);assert.equal(time.tooltip.axisPointer.type,'line');
   const signalTooltip=time.tooltip.formatter([{value:[h.app.state.data.start*1000,.011],dataIndex:0}]);
-  assert.match(signalTooltip,/桶内 RMS 动态幅值/);assert.match(signalTooltip,/桶内峰值偏差/);assert.match(signalTooltip,/均值合成比力/);assert.match(signalTooltip,/桶内范围/);assert.match(signalTooltip,/有效值：3 点/);
-  assert.equal(spectrum.xAxis.max,4);assert.equal(spectrum.series[0].data.length,2);
-  assert.match(h.node('signalVibrationState').textContent,/1 个时间桶/);
-  assert.match(h.node('signalVibrationMetrics').innerHTML,/筛选区间 RMS/);
-  assert.match(h.node('signalVibrationNote').textContent,/低频载体振动观察/);
-  h.app.setView('overview');h.app.renderOverview();
-  const range=h.calls.options.get('overviewVibrationTimeChart');
-  const overviewSpectrum=h.calls.options.get('overviewVibrationSpectrumChart');
-  assert.equal(range.xAxis.min,h.app.state.data.start*1000);assert.equal(range.xAxis.max,h.app.state.data.end*1000);
-  assert.equal(range.series[0].data[0][1],.011);assert.equal(range.series[1].data[0][1],.02);
-  assert.deepEqual(time.series[0].data,range.series[0].data);
-  assert.deepEqual(time.series[1].data,range.series[1].data);
-  assert.deepEqual(spectrum.series[0].data,overviewSpectrum.series[0].data);
-  assert.match(range.tooltip.formatter([{value:[h.app.state.data.start*1000,.011]}]),/有效值：3 点/);
-  assert.match(h.node('overviewVibrationState').textContent,/1 个时间桶/);
-  assert.match(h.node('overviewVibrationMetrics').innerHTML,/筛选区间 RMS/);
+  assert.match(signalTooltip,/车辆速度：/);assert.match(signalTooltip,/振动 RMS：/);assert.match(signalTooltip,/振动峰值偏差：/);assert.match(signalTooltip,/振动有效值：3 点/);
+  const speedTooltip=speed.tooltip.formatter([{value:[h.app.state.data.start*1000,.1],dataIndex:0}]);
+  assert.match(speedTooltip,/车辆速度：/);assert.match(speedTooltip,/振动 RMS：/);assert.equal(speed.xAxis.min,time.xAxis.min);assert.equal(speed.xAxis.max,time.xAxis.max);
+  assert.deepEqual(spectrum.series[0].data,[[1,.01],[2,.03]]);assert.equal(spectrum.xAxis.max,4);
+  assert.match(h.node('overviewVibrationNote').textContent,/动态 RMS 最大的连续 60 秒窗/);assert.deepEqual(h.calls.connections,['overview-speed-vibration']);
+  h.app.setView('signals');
+  assert.equal(h.calls.options.has('signalVibrationTimeChart'),false);assert.equal(h.calls.options.has('signalVibrationSpectrumChart'),false);
+  assert.match(h.node('signal-note-0').textContent,/机体相对水平和北向的转角/);
   h.respond(async params=>queryFixture(params,0));await h.clickRange(900);
   assert.match(h.node('overviewVibrationState').textContent,/暂无可分析/);
   assert.match(h.calls.options.get('overviewVibrationTimeChart').graphic[0].style.text,/所选时段无采样/);
 });
 
 test('overview and inertial curves draw dashed alarm thresholds for direct channels',async()=>{
-  const h=await appHarness(),params=new URLSearchParams({start:'100',end:'200',device:'SN1'}),rules={version:1,speed_kmh:80,age_s:10,roll_deg:15,pitch_deg:12,position_std_m:2,shock_g:.5};
-  h.app.setData(queryFixture(params));h.app.state.device={id:'SN1',rules,mount_confirmed:true};
+  const h=await appHarness(),params=new URLSearchParams({start:'100',end:'200',device:'SN1'}),rules={version:1,speed_kmh:80,age_s:10,roll_deg:15,pitch_deg:12,position_std_m:2,shock_g:.5},data=queryFixture(params);
+  data.quality.excluded_fields={lat:2,lon:3};h.app.setData(data);h.app.state.device={id:'SN1',rules,mount_confirmed:true};
   h.app.renderOverview();
   const speed=h.calls.options.get('speedChart'),speedLine=speed.series.find(s=>s.name==='车辆速度');
   assert.equal(speedLine.markLine.lineStyle.type,'dashed');assert.equal(speedLine.markLine.data[0].yAxis,80);
@@ -198,8 +190,9 @@ test('overview and inertial curves draw dashed alarm thresholds for direct chann
   assert.equal(position.markLine.data[0].yAxis,2);
   const age=h.calls.options.get('signal-9').series.find(s=>s.name==='差分延迟');
   assert.equal(age.markLine.data[0].yAxis,10);
-  assert.match(h.node('signal-note-1').textContent,/本组无可直接映射的水平报警阈值/);
-  assert.match(h.node('signalVibrationNote').textContent,/冲击参考线 0\.80 g/);assert.match(h.node('signalVibrationNote').textContent,/设备当前事件阈值 0\.50 g/);
+  assert.match(h.node('signal-note-1').textContent,/绕三个安装轴的转动速率/);
+  assert.match(h.node('signal-note-4').textContent,/纬度 2 个值/);assert.match(h.node('signal-note-4').textContent,/经度 3 个值/);assert.doesNotMatch(h.node('signal-note-4').textContent,/报警阈值/);
+  assert.match(h.node('overviewVibrationNote').textContent,/冲击参考线 0\.80 g/);assert.match(h.node('overviewVibrationNote').textContent,/设备当前事件阈值 0\.50 g/);
 });
 
 test('inertial analysis separates signed acceleration and three-axis shock decision curves',async()=>{

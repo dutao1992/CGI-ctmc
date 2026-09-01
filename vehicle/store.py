@@ -13,7 +13,7 @@ from . import quality
 from .aggregate import (METRICS, ROLLUP_LEVELS, ROLLUP_SECONDS, ROLLUP_VERSION, QueryCombiner,
                         RollupBuilder, bucket_start, decode as decode_rollup,
                         encode as encode_rollup)
-from .vibration import LOOKBACK_S, analyze as analyze_vibration, unavailable as vibration_unavailable
+from .vibration import MAX_GAP_S, MAX_WINDOW_S, MIN_SAMPLES, analyze as analyze_vibration, unavailable as vibration_unavailable
 
 
 def _sum_existing_sizes(paths):
@@ -51,6 +51,9 @@ CREATE TABLE IF NOT EXISTS point_rollups (
  version INTEGER NOT NULL, point_count INTEGER NOT NULL, payload TEXT NOT NULL,
  PRIMARY KEY(device_id,bucket_s,bucket_start)) WITHOUT ROWID;
 '''
+
+VIBRATION_RAW_SCAN_MAX_S = 6 * 3600
+VIBRATION_ROLLUP_CANDIDATES = 24
 
 
 class Connection(sqlite3.Connection):
@@ -446,12 +449,10 @@ class Store:
             return describe(p)
 
     @staticmethod
-    def _vibration(connection, sn, start, last_t):
-        if last_t is None:
-            return vibration_unavailable('所选时段无采样')
+    def _vibration_rows(connection, sn, start, end):
         rows = connection.execute(
             quality.JOIN + ' WHERE p.device_id=? AND p.t>=? AND p.t<=? ORDER BY p.t,p.protocol',
-            (sn, max(start, last_t - LOOKBACK_S), last_t),
+            (sn, start, end),
         )
         # Multiple enabled protocols may share one timestamp. Prefer GPCHCX,
         # while still allowing a single GPCHC stream to use the same projection.
@@ -463,7 +464,71 @@ class Store:
             current = by_time.get(point['t'])
             if current is None or point['protocol'] == 'GPCHCX':
                 by_time[point['t']] = point
-        return analyze_vibration(list(by_time.values()))
+        return list(by_time.values())
+
+    @staticmethod
+    def _vibration_rollup_candidates(connection, sn, start, end):
+        """Rank 60-second rollups, then let raw samples verify the winner.
+
+        Long queries must not scan every raw row just to find a diagnostic
+        window.  Rollup dynamic RMS provides a deterministic shortlist; raw
+        samples around those buckets preserve the exact Hann FFT and gap rules.
+        """
+        rows = connection.execute('''SELECT bucket_start,payload,version FROM point_rollups
+                WHERE device_id=? AND bucket_s=? AND bucket_start<? AND bucket_start+?>?
+                ORDER BY bucket_start''',
+                (sn, 60, end, 60, start)).fetchall()
+        ranked = []
+        for row in rows:
+            if row['version'] != ROLLUP_VERSION:
+                continue
+            try:
+                vibration = decode_rollup(row['payload']).get('vibration') or []
+                lo, hi, total, squares, count = vibration
+                if not count or count < MIN_SAMPLES or lo is None or hi is None:
+                    continue
+                mean = total / count
+                rms = math.sqrt(max(0.0, squares / count - mean * mean))
+                peak = max(abs(lo - mean), abs(hi - mean))
+                ranked.append((rms, peak, int(row['bucket_start'])))
+            except (TypeError, ValueError, KeyError):
+                continue
+        ranked.sort(key=lambda item: (item[0], item[1], -item[2]), reverse=True)
+        selected = set()
+        for _, _, bucket in ranked[:VIBRATION_ROLLUP_CANDIDATES]:
+            # Neighbor buckets let the raw verifier evaluate a true sliding
+            # 60-second window that straddles a rollup boundary.
+            selected.update((bucket - 60, bucket, bucket + 60))
+        if ranked:
+            # Include both selection edges so a high-amplitude 60-second
+            # window clipped by a custom range is still considered.
+            edge_starts = {
+                bucket_start(start), bucket_start(start) + 60,
+                bucket_start(max(start, end - MAX_WINDOW_S)),
+                bucket_start(max(start, end - MAX_WINDOW_S)) - 60,
+            }
+            selected.update(edge_starts)
+        return sorted(value for value in selected if value < end + MAX_GAP_S and value + 60 > start - MAX_GAP_S)
+
+    @staticmethod
+    def _vibration(connection, sn, start, end):
+        if end is None or end < start:
+            return vibration_unavailable('所选时段无采样')
+        span = end - start
+        if span <= VIBRATION_RAW_SCAN_MAX_S:
+            return analyze_vibration(Store._vibration_rows(connection, sn, start, end))
+        candidate_starts = Store._vibration_rollup_candidates(connection, sn, start, end)
+        if not candidate_starts:
+            return vibration_unavailable('筛选时段没有可用于诊断的 60 秒振动聚合候选')
+        samples = []
+        for bucket in candidate_starts:
+            samples.extend(Store._vibration_rows(
+                connection, sn, max(start, bucket - MAX_GAP_S), min(end, bucket + MAX_WINDOW_S + MAX_GAP_S)
+            ))
+        result = analyze_vibration(samples)
+        if result.get('available'):
+            result.setdefault('selection', {})['rollup_candidates'] = len(candidate_starts)
+        return result
 
     def query(self, sn, start, end, bins=700):
         if not math.isfinite(start+end) or end <= start or end-start > 31*86400:
@@ -520,7 +585,7 @@ class Store:
                     combiner.add(snapshot)
                 source = 'raw'
                 resolution = 0
-            vibration = self._vibration(c, sn, start, combiner.last)
+            vibration = self._vibration(c, sn, start, end)
         result = combiner.finish(contexts,source,resolution,(time.perf_counter()-started)*1000)
         vibration['range'] = result.pop('vibration_range')
         result['vibration'] = vibration
