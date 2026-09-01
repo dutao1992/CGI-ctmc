@@ -470,7 +470,7 @@ function renderSignals(){
   chartGroups.forEach(([title,unit,metrics],i)=>{
     buildChart('signal-'+i,metrics,{stationary,threshold:metrics[0][0]==='speed'&&!stationary?state.device.rules.speed_kmh:metrics[0][0]==='age'?state.device.rules.age_s:undefined});
     const removed=metrics.filter(([key])=>state.data.quality?.excluded_fields[key]).map(([key,label])=>`${label} ${state.data.quality.excluded_fields[key].toLocaleString()} 个值`);
-    $('signal-note-'+i).textContent=(!state.data.total?'所选时段无采样。':removed.length?'本时段已屏蔽：'+removed.join('；')+'。':'本时段这些通道无剔除值。')+' '+chartAlarmSummary(metrics,{stationary})+(title.includes('标准差')?' 标准差用于质量诊断；持续静止状态下超限值会转入异常台账。':'')+(stationary&&metrics.some(([key])=>['speed','ve','vn','vu'].includes(key))?' 静止残余速度不代表载体在移动。':'');
+    $('signal-note-'+i).textContent=(!state.data.total?'所选时段无采样。':removed.length?'本时段已屏蔽：'+removed.join('；')+'。':'本时段这些通道无剔除值。')+' '+chartAlarmSummary(metrics,{stationary})+(title.includes('标准差')?' 标准差原值用于质量诊断；确认静止时若水平 σ 超限，仅经纬度进入异常台账，σ 本身继续展示。':'')+(stationary&&metrics.some(([key])=>['speed','ve','vn','vu'].includes(key))?' 静止残余速度不代表载体在移动。':'');
   });
 }
 function offlineChartData(data,metric,multiplier,index){
