@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#102f29"><title>CGI 车载数据服务 · CTMC Quality OS</title>
-  <link rel="stylesheet" href="./vendor/leaflet.css?v=a78371028241"><link rel="stylesheet" href="./style.css?v=cb5f2f4b0ec2">
+  <link rel="stylesheet" href="./vendor/leaflet.css?v=a78371028241"><link rel="stylesheet" href="./style.css?v=0e5648c500ac">
   <script defer src="./vendor/leaflet.js?v=db49d009c841"></script><script defer src="./vendor/echarts.min.js?v=b66b25aeb4df"></script><script defer src="./vendor/coordtransform.js?v=e941a1a5825c"></script>
   <script defer src="./map.js?v=5e1771241c19"></script>
-  <script defer src="./app.js?v=95aa1f2a5bbc"></script>
+  <script defer src="./app.js?v=29b1ec9585c8"></script>
 </head>
 <body>
 <aside class="rail">
@@ -69,6 +69,10 @@
       <div class="vibration-metrics" id="signalVibrationMetrics" aria-live="polite"></div>
       <div class="vibration-chart-grid"><section><div class="vibration-chart-label"><b>动态振动幅值</b><span>桶内 RMS · 峰值偏差 · 不插值</span></div><div class="chart vibration-time-chart" id="signalVibrationTimeChart" aria-label="惯导分析筛选时段振动 RMS 和峰值曲线"></div></section><section><div class="vibration-chart-label"><b>末端诊断频谱</b><span>连续 60 秒 · Hann 窗 FFT</span></div><div class="chart vibration-spectrum-chart" id="signalVibrationSpectrumChart" aria-label="惯导分析末端 60 秒低频振动傅里叶幅值谱"></div></section></div>
       <p class="vibration-note" id="signalVibrationNote">10 Hz 只能观察 0–4 Hz 低频载体振动；频谱仅使用筛选末端的连续原始窗，不用于高频机械故障诊断。</p>
+    </section>
+    <section class="panel decision-curves-panel" aria-labelledby="signalDecisionTitle">
+      <div class="panel-head decision-curves-head"><div><p class="eyebrow">05 / DERIVED DECISION</p><h2 id="signalDecisionTitle">工况判定曲线 <span class="h2-unit">当前筛选 · 独立判定</span></h2><p>急加减速与三轴冲击拆分显示；虚线为判定参考线，事件峰值保留在曲线上。</p></div><span class="status-pill">独立判定</span></div>
+      <div class="decision-chart-grid"><section><div class="vibration-chart-label"><b>急加减速判定</b><span>速度变化率 · m/s² · 正加速 / 负减速</span></div><div class="chart decision-chart" id="signalAccelerationChart" aria-label="急加减速判定曲线"></div><p class="signal-data-note" id="signalAccelerationNote"></p></section><section><div class="vibration-chart-label"><b>三轴冲击判定</b><span>合成比力峰值偏差 · g</span></div><div class="chart decision-chart" id="signalShockChart" aria-label="三轴冲击判定曲线"></div><p class="signal-data-note" id="signalShockNote"></p></section></div>
     </section>
     <div class="signal-grid" id="signalCharts"></div><section class="panel method-note"><h3>读图说明</h3><p>加速度为保留重力的比力，安装倾斜时某轴接近 1g、横滚接近 -90° 均可能正常。无定向的航向和静止时的航迹角不展示。振动窗只反映 10 Hz 输入可见的低频载体变化，不是高频机械故障或人体舒适度评级。静止参考仅适用于已确认设备和时间段；新设备与未来时段不继承此假设。离群值是待复核测量，原值及原因见数据质量页。</p></section></section>
   <section id="eventsView" class="view" hidden><div class="section-intro"><div><h2>异常事件与处置台账</h2><p>运行预警使用过滤后的有效测量；定位、设备和链路质量提示保留。被隔离的数值见数据质量页，业务阈值不等同于法定违规认定。</p></div><select id="eventFilter" aria-label="事件筛选"><option value="all">全部事件</option><option value="warning">仅预警</option><option value="info">仅数据质量</option><option value="open">待处理</option><option value="resolved">已关闭</option></select></div><div id="eventList" class="panel"></div></section>

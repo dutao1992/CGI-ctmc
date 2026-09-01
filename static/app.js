@@ -19,6 +19,7 @@ const rules = {
 const views = {overview:['每一段轨迹，都有数据可循','从运行轨迹到惯导信号，连续观察运输过程中的状态与变化。'],signals:['看见变化，定位原因','速度、姿态、比力与角速度，在同一条时间轴上对照。'],events:['异常有据，处置有痕','区分导航质量、设备告警与业务预警，保留现场采样证据。'],fleet:['从一台设备，到整个车队','独立设备档案与规则，为后续多 CGI 模块接入保留清晰边界。'],quality:['知道数据来自哪里，也知道它的边界','接收、校验、定位和分析，分别给出可核查的状态。'],offline:['让一份离线记录，重新成为完整行程','上传有效数据 CSV 或 CSV.GZ，在不进入实时数据库的前提下重建轨迹、事件与惯导工况。']};
 const colors = ['#397c63','#c38a42','#729dc1'];
 const VIBRATION_VIEW_MODE = 'range';
+const SHOCK_REFERENCE_G = 0.8;
 let map,routeLayer,eventLayer,playMarker,tileLayer,resizeTimer;
 let offlineMap,offlineRouteLayer,offlineEventLayer,offlineTileLayer;
 
@@ -63,6 +64,7 @@ function clearResults(message){
   state.charts.forEach(c=>{c.clear();c.setOption({graphic:[{type:'text',left:'center',top:'middle',style:{text:message,fill:'#7a8970',fontSize:12}}]});});
   for(const id of ['kpis','segments','eventPreview','eventList','filterSummary','quarantineList'])$(id).innerHTML=`<div class="empty">${esc(message)}</div>`;
   document.querySelectorAll('.signal-data-note').forEach(el=>el.textContent='');
+  for(const id of ['signalAccelerationNote','signalShockNote'])$(id).textContent='';
   for(const id of ['aggregationLabel','quarantineCount','qualityPage'])$(id).textContent='';
   for(const id of ['exportBtn','exportExcluded','qualityPrev','qualityNext','playBtn','timeline'])$(id).disabled=true;
   for(const id of ['filterBanner','notice','stationaryMapNote'])$(id).hidden=true;
@@ -341,12 +343,12 @@ function vibrationChart(id,kind,vibration,mode='window'){
   const common={animation:false,textStyle:{fontFamily:'PingFang SC, sans-serif'},grid:{left:52,right:20,top:rangeMode?38:18,bottom:compact?36:48},legend:rangeMode?{show:true,top:8,left:55,itemWidth:14,itemHeight:2,textStyle:{fontSize:9,color:'#788d6d'}}:{show:false},tooltip:{trigger:'axis',renderMode:'html',confine:true,backgroundColor:'#fff',borderColor:'#d4dec9',textStyle:{fontSize:10,color:'#315c45'},valueFormatter:value=>number(value,5)},graphic:[{type:'text',left:'center',top:'middle',invisible:available,style:{text:vibration?.reason||'本时段没有可用的连续振动窗',fill:'#7a8970',fontSize:11,lineHeight:20,textAlign:'center'}}]};
   if(kind==='time'){
     const rows=available?(rangeMode?vibration.series:vibration.time):[];
-    const shock=Number.isFinite(+(state.device?.rules||{}).shock_g)?+(state.device?.rules||{}).shock_g:null;
-    const shockLine=Number.isFinite(shock)?{symbol:'none',label:{formatter:`冲击候选参考线 ${number(shock,2)} g`,fontSize:9,color:'#a76b3d',backgroundColor:'#fffaf1',padding:[2,3]},lineStyle:{type:'dashed',width:1.2,color:'#be7e46'},data:[{yAxis:shock}]}:undefined;
+    const shockLine={symbol:'none',label:{formatter:`冲击参考线 ${number(SHOCK_REFERENCE_G,2)} g`,fontSize:9,color:'#a76b3d',backgroundColor:'#fffaf1',padding:[2,3]},lineStyle:{type:'dashed',width:1.2,color:'#be7e46'},data:[{yAxis:SHOCK_REFERENCE_G}]};
     const rangeSeries=[{name:'桶内 RMS 动态幅值',type:'line',data:rows.map(row=>[row[0],row[1]]),showSymbol:false,lineStyle:{width:2,color:'#c0833c'},areaStyle:{color:'#c0833c18'},itemStyle:{color:'#c0833c'},connectNulls:false},{name:'桶内峰值偏差',type:'line',data:rows.map(row=>[row[0],row[2]]),showSymbol:false,lineStyle:{width:1.3,color:'#386f5b'},itemStyle:{color:'#386f5b'},connectNulls:false,markLine:shockLine}];
     const windowSeries=[{name:'动态合成比力',type:'line',data:rows.map(row=>[row[0],row[1]]),showSymbol:false,lineStyle:{width:1.25,color:'#386f5b'},itemStyle:{color:'#386f5b'},connectNulls:false},{name:'1 秒 RMS 包络',type:'line',data:rows.map(row=>[row[0],row[2]]),showSymbol:false,lineStyle:{width:2,color:'#c0833c'},areaStyle:{color:'#c0833c18'},itemStyle:{color:'#c0833c'},connectNulls:false,markLine:shockLine}];
     const tooltip=rangeMode?{...common.tooltip,formatter:params=>{const list=Array.isArray(params)?params:[params],first=list[0],timestamp=first?.value?.[0]??first?.data?.[0],row=rows[first?.dataIndex]||rows.find(item=>item[0]===timestamp);if(!row)return '';return `${chartClock(timestamp).replace('\n',' ')}<br/>桶内 RMS 动态幅值：${number(row[1],5)} g<br/>桶内峰值偏差：${number(row[2],5)} g<br/>均值合成比力：${number(row[3],5)} g<br/>桶内范围：${number(row[4],5)} – ${number(row[5],5)} g<br/>有效值：${number(row[6],0)} 点`;}}:common.tooltip;
-    chart.setOption({...common,tooltip,xAxis:{type:'time',min:rangeMode?state.data.start*1000:(available?vibration.start*1000:state.data.start*1000),max:rangeMode?state.data.end*1000:(available?vibration.end*1000:state.data.end*1000),axisLine:{lineStyle:{color:'#dbe4d7'}},axisTick:{show:false},axisLabel:{fontSize:9,color:'#82917b',formatter:value=>chartClock(value),hideOverlap:true},splitLine:{show:false}},yAxis:{type:'value',name:'g',nameTextStyle:{fontSize:9,color:'#8b9785'},scale:true,axisLabel:{fontSize:9,color:'#82917b'},splitLine:{lineStyle:{color:'#edf1e7',type:'dashed'}}},dataZoom:compact?[]:[{type:'inside',filterMode:'none',start:0,end:100},{type:'slider',start:0,end:100,height:12,bottom:8,borderColor:'#d9e3ce',fillerColor:'#8ca97124',handleStyle:{color:'#6d9360'},textStyle:{fontSize:8}}],series:rangeMode?rangeSeries:windowSeries},true);
+    const vibrationValues=rows.flatMap(row=>[row[1],row[2]]).filter(value=>Number.isFinite(value)),vibrationMin=Math.min(0,...vibrationValues),vibrationMax=Math.max(SHOCK_REFERENCE_G,...vibrationValues),vibrationPad=Math.max((vibrationMax-vibrationMin)*.05,.02);
+    chart.setOption({...common,tooltip,xAxis:{type:'time',min:rangeMode?state.data.start*1000:(available?vibration.start*1000:state.data.start*1000),max:rangeMode?state.data.end*1000:(available?vibration.end*1000:state.data.end*1000),axisLine:{lineStyle:{color:'#dbe4d7'}},axisTick:{show:false},axisLabel:{fontSize:9,color:'#82917b',formatter:value=>chartClock(value),hideOverlap:true},splitLine:{show:false}},yAxis:{type:'value',name:'g',nameTextStyle:{fontSize:9,color:'#8b9785'},min:vibrationMin,max:vibrationMax+vibrationPad,scale:true,axisLabel:{fontSize:9,color:'#82917b'},splitLine:{lineStyle:{color:'#edf1e7',type:'dashed'}}},dataZoom:compact?[]:[{type:'inside',filterMode:'none',start:0,end:100},{type:'slider',start:0,end:100,height:12,bottom:8,borderColor:'#d9e3ce',fillerColor:'#8ca97124',handleStyle:{color:'#6d9360'},textStyle:{fontSize:8}}],series:rangeMode?rangeSeries:windowSeries},true);
   }else{
     const maximum=available?vibration.usable_frequency_hz[1]:4,dominant=available?vibration.metrics.dominant_hz:null;
     chart.setOption({...common,grid:{...common.grid,left:48},xAxis:{type:'value',min:0,max:maximum,name:'Hz',nameLocation:'end',nameTextStyle:{fontSize:9,color:'#8b9785'},axisLine:{lineStyle:{color:'#dbe4d7'}},axisTick:{show:false},axisLabel:{fontSize:9,color:'#82917b'},splitLine:{show:false}},yAxis:{type:'value',name:'幅值 g',nameTextStyle:{fontSize:9,color:'#8b9785'},min:0,axisLabel:{fontSize:9,color:'#82917b'},splitLine:{lineStyle:{color:'#edf1e7',type:'dashed'}}},series:[{name:'FFT 单边幅值',type:'bar',data:available?vibration.spectrum:[],barMaxWidth:6,itemStyle:{color:'#4c8068'},emphasis:{itemStyle:{color:'#bd7c35'}},markLine:Number.isFinite(dominant)?{symbol:'none',label:{formatter:`主频 ${number(dominant,2)} Hz`,fontSize:9,color:'#9a642d'},lineStyle:{type:'dashed',color:'#bd7c35'},data:[{xAxis:dominant}]}:undefined}]},true);
@@ -356,8 +358,8 @@ function vibrationChart(id,kind,vibration,mode='window'){
 function renderVibration(prefix,mode='window'){
   const all=state.data?.vibration||{},vibration=mode==='range'?(all.range||{available:false,reason:'查询结果中没有筛选时段振动值'}):all,status=$(prefix+'VibrationState'),metrics=$(prefix+'VibrationMetrics'),note=$(prefix+'VibrationNote');
   if(!status||!metrics||!note)return;
-  const shockRule=Number.isFinite(+(state.device?.rules||{}).shock_g)?+(state.device?.rules||{}).shock_g:null;
-  const shockNote=Number.isFinite(shockRule)?` 虚线为冲击候选参考线 ${number(shockRule,2)} g；最终告警仍按三轴合成比力规则判定。`:'';
+  const configuredShock=Number.isFinite(+(state.device?.rules||{}).shock_g)?+(state.device?.rules||{}).shock_g:null;
+  const shockNote=` 虚线为冲击参考线 ${number(SHOCK_REFERENCE_G,2)} g；最终告警仍按三轴合成比力规则判定${Number.isFinite(configuredShock)&&configuredShock!==SHOCK_REFERENCE_G?`（设备当前事件阈值 ${number(configuredShock,2)} g）`:''}。`;
   status.className='status-pill '+(vibration.available?'good':'warn');
   if(vibration.available){
     const values=vibration.metrics;
@@ -372,6 +374,59 @@ function renderVibration(prefix,mode='window'){
   }
   vibrationChart(prefix+'VibrationTimeChart','time',vibration,mode);
   vibrationChart(prefix+'VibrationSpectrumChart','spectrum',mode==='range'?all:vibration,'window');
+}
+function derivedStationaryAt(t){
+  return (state.data?.quality?.contexts||[]).some(scope=>scope.start<=t&&(scope.end===null||scope.end===undefined||t<=scope.end));
+}
+function derivedAccelerationData(){
+  const rows=state.data?.series?.speed||[],bucket=Number(state.data?.aggregation?.bucket_s)||1;
+  const maxGapS=Math.max(3,bucket*2.2),out=[];let previous=null;
+  for(const row of rows){
+    const t=Number(row?.[0]),speed=Number(row?.[1]);
+    if(!Number.isFinite(t))continue;
+    const usable=Number.isFinite(speed)&&!derivedStationaryAt(t/1000);
+    if(!usable){if(previous)out.push([t-1,null]);previous=null;continue;}
+    if(previous){
+      const delta=(t-previous.t)/1000;
+      if(delta>0&&delta<=maxGapS)out.push([t,(speed-previous.speed)/delta]);
+      else {out.push([t-1,null],[t,null]);}
+    }else out.push([t,null]);
+    previous={t,speed};
+  }
+  return out;
+}
+function decisionEvents(mode){
+  const kinds=mode==='acceleration'?['acceleration','braking']:['shock'];
+  return (state.data?.events?.items||[]).filter(event=>kinds.includes(event.kind)&&Number.isFinite(event.point_t)&&event.point_t>=state.data.start&&event.point_t<=state.data.end).map(event=>{
+    const value=mode==='acceleration'?(event.kind==='braking'?-Math.abs(+event.peak):Math.abs(+event.peak)):+event.peak;
+    return Number.isFinite(value)?[event.point_t*1000,value,event.id]:null;
+  }).filter(Boolean);
+}
+function decisionExclusionAreas(){
+  return (state.data?.quality?.contexts||[]).map(scope=>[{xAxis:Math.max(state.data.start,scope.start)*1000},{xAxis:Math.min(state.data.end,scope.end??state.data.end)*1000}]).filter(([left,right])=>left.xAxis<right.xAxis);
+}
+function buildDecisionChart(id,mode){
+  const element=$(id);if(!element||!window.echarts||!state.data)return;
+  let chart=echarts.getInstanceByDom(element);
+  if(!chart){chart=echarts.init(element,null,{renderer:'canvas'});state.charts.push(chart);}
+  const acceleration=mode==='acceleration';
+  const rows=acceleration?derivedAccelerationData():(state.data.vibration?.range?.series||[]).map(row=>[row[0],Number.isFinite(+row[2])?+row[2]:null]);
+  const events=decisionEvents(mode),hasValues=rows.some(row=>Number.isFinite(row[1]))||events.length>0;
+  const thresholds=acceleration?[{yAxis:Number(state.device?.rules?.accel_ms2)||3,label:{formatter:`急加速上限 ${number(Number(state.device?.rules?.accel_ms2)||3,2)} m/s²`,position:'insideEndTop'}},{yAxis:-(Number(state.device?.rules?.brake_ms2)||3.5),label:{formatter:`急减速下限 −${number(Number(state.device?.rules?.brake_ms2)||3.5,2)} m/s²`,position:'insideStartBottom'}}]:[{yAxis:SHOCK_REFERENCE_G,label:{formatter:`冲击参考线 ${number(SHOCK_REFERENCE_G,2)} g`,position:'insideEndTop'}}];
+  const plottedValues=rows.map(row=>row[1]).concat(events.map(row=>row[1])).filter(value=>Number.isFinite(value)),thresholdValues=thresholds.map(line=>line.yAxis),axisMin=acceleration?Math.min(0,...plottedValues,...thresholdValues):0,axisMax=Math.max(0,...plottedValues,...thresholdValues),axisPad=Math.max((axisMax-axisMin)*.08,acceleration?.1:.02),exclusionAreas=decisionExclusionAreas();
+  const line={name:acceleration?'速度变化率':'三轴合成峰值偏差',type:'line',data:rows,showSymbol:false,progressive:2000,progressiveThreshold:3000,lineStyle:{width:1.8,color:acceleration?'#397c63':'#386f5b'},areaStyle:acceleration?undefined:{color:'#386f5b12'},itemStyle:{color:acceleration?'#397c63':'#386f5b'},connectNulls:false,markArea:exclusionAreas.length?{silent:true,itemStyle:{color:'#8e9a8317'},label:{show:false},data:exclusionAreas}:undefined,markLine:{symbol:'none',label:{fontSize:9,color:'#a76b3d',backgroundColor:'#fffaf1',padding:[2,3]},lineStyle:{type:'dashed',width:1.2,color:'#be7e46'},data:thresholds}};
+  const marker={name:acceleration?'急加减速事件':'三轴冲击事件',type:'scatter',data:events,symbol:'diamond',symbolSize:9,itemStyle:{color:'#bb6d38'},z:9};
+  chart.setOption({animation:false,textStyle:{fontFamily:'PingFang SC, sans-serif'},grid:{left:57,right:24,top:acceleration?45:38,bottom:48},legend:{show:true,top:9,right:20,data:[line.name,marker.name],textStyle:{fontSize:10,color:'#788d6d'},itemWidth:13,itemHeight:2},tooltip:{trigger:'axis',renderMode:'html',confine:true,backgroundColor:'#fff',borderColor:'#d4dec9',textStyle:{fontSize:10,color:'#315c45'},valueFormatter:value=>number(value,3)},xAxis:{type:'time',min:state.data.start*1000,max:state.data.end*1000,axisLine:{lineStyle:{color:'#dbe4d7'}},axisTick:{show:false},axisLabel:{fontSize:9,color:'#82917b',formatter:value=>chartClock(value),hideOverlap:true},splitLine:{show:false}},yAxis:{type:'value',name:acceleration?'m/s²':'g',nameTextStyle:{fontSize:9,color:'#8b9785'},min:axisMin,max:axisMax+axisPad,scale:true,axisLabel:{fontSize:9,color:'#82917b'},splitNumber:4,splitLine:{lineStyle:{color:'#edf1e7',type:'dashed'}}},dataZoom:[{type:'inside',filterMode:'none',start:0,end:100},{type:'slider',start:0,end:100,height:12,bottom:8,borderColor:'#d9e3ce',fillerColor:'#8ca97124',handleStyle:{color:'#6d9360'},textStyle:{fontSize:8}}],series:[line,marker],graphic:[{id:'decision-empty',type:'text',left:'center',top:'middle',invisible:hasValues,style:{text:state.data.total?'本时段没有可用的判定曲线':'所选时段无采样',fill:'#7a8970',fontSize:12,lineHeight:22,textAlign:'center'}}]},true);
+  chart.off('click');chart.on('click',point=>{if(point.seriesType==='scatter'&&point.data?.[2])locateEvent(point.data[2]);else if(Array.isArray(point.value)){setView('overview');selectTime(point.value[0]/1000);}});
+  chart.resize();
+}
+function renderDecisionCurves(){
+  if(!state.data)return;
+  buildDecisionChart('signalAccelerationChart','acceleration');buildDecisionChart('signalShockChart','shock');
+  const accelerationPoints=derivedAccelerationData().filter(row=>Number.isFinite(row[1])).length,accelerationEvents=decisionEvents('acceleration').length;
+  const shockRows=(state.data.vibration?.range?.series||[]).filter(row=>Number.isFinite(+row[2])).length,shockEvents=decisionEvents('shock').length;
+  $('signalAccelerationNote').textContent=state.data.total?`正值为加速、负值为减速；${accelerationPoints.toLocaleString()} 个速度变化率点，${accelerationEvents.toLocaleString()} 项事件峰值已标记。曲线按筛选后的速度时间桶均值计算，不跨缺测或静止隔离段。`:'所选时段无采样，无法生成急加减速判定曲线。';
+  $('signalShockNote').textContent=state.data.total?`${shockRows.toLocaleString()} 个三轴合成峰值偏差时间桶，${shockEvents.toLocaleString()} 项冲击事件峰值已标记。虚线为 ${number(SHOCK_REFERENCE_G,2)} g 参考线；不对缺测或静止隔离值补零。`:'所选时段无采样，无法生成三轴冲击判定曲线。';
 }
 const chartGroups=[
  ['姿态角','°',[['heading','航向','°'],['pitch','俯仰','°'],['roll','横滚','°']]],
@@ -389,6 +444,7 @@ const chartGroups=[
 ];
 function renderSignals(){
   renderVibration('signal',VIBRATION_VIEW_MODE);
+  renderDecisionCurves();
   if(!$('signalCharts').children.length)$('signalCharts').innerHTML=chartGroups.map(([title,unit],i)=>`<section class="panel"><div class="panel-head"><h2>${title}<span class="h2-unit">${unit}</span></h2><span class="muted">${String(i+1).padStart(2,'0')}</span></div><div class="chart" id="signal-${i}"></div><p class="signal-data-note" id="signal-note-${i}"></p></section>`).join('');
   const stationary=stationaryRange(state.data.quality?.contexts,state.data.summary.first_t,state.data.summary.last_t);
   chartGroups.forEach(([title,unit,metrics],i)=>{

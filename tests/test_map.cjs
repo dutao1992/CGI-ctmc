@@ -178,7 +178,7 @@ test('overview and inertial curves draw dashed alarm thresholds for direct chann
   const speed=h.calls.options.get('speedChart'),speedLine=speed.series.find(s=>s.name==='车辆速度');
   assert.equal(speedLine.markLine.lineStyle.type,'dashed');assert.equal(speedLine.markLine.data[0].yAxis,80);
   const overviewVibration=h.calls.options.get('overviewVibrationTimeChart');
-  assert.equal(overviewVibration.series[1].markLine.lineStyle.type,'dashed');assert.equal(overviewVibration.series[1].markLine.data[0].yAxis,.5);
+  assert.equal(overviewVibration.series[1].markLine.lineStyle.type,'dashed');assert.equal(overviewVibration.series[1].markLine.data[0].yAxis,.8);
   h.app.setView('signals');
   const pitch=h.calls.options.get('signal-0').series.find(s=>s.name==='俯仰');
   assert.deepEqual(Array.from(pitch.markLine.data,map=>map.yAxis),[12,-12]);
@@ -187,7 +187,28 @@ test('overview and inertial curves draw dashed alarm thresholds for direct chann
   const age=h.calls.options.get('signal-9').series.find(s=>s.name==='差分延迟');
   assert.equal(age.markLine.data[0].yAxis,10);
   assert.match(h.node('signal-note-1').textContent,/本组无可直接映射的水平报警阈值/);
-  assert.match(h.node('signalVibrationNote').textContent,/冲击候选参考线 0\.50 g/);
+  assert.match(h.node('signalVibrationNote').textContent,/冲击参考线 0\.80 g/);assert.match(h.node('signalVibrationNote').textContent,/设备当前事件阈值 0\.50 g/);
+});
+
+test('inertial analysis separates signed acceleration and three-axis shock decision curves',async()=>{
+  const h=await appHarness(),params=new URLSearchParams({start:'100',end:'200',device:'SN1'}),data=queryFixture(params);
+  data.aggregation.bucket_s=1;
+  data.series.speed=[[100000,1,1,1],[101000,5,5,5],[102000,1.5,1.5,1.5],[110000,2,2,2]];
+  data.vibration.range.series=[[100000,.01,.4,1,.9,1.2,10],[101000,.02,.85,1,.8,1.65,10]];
+  data.events={total:3,items:[
+    {id:1,kind:'acceleration',point_t:101,peak:4,threshold:3},
+    {id:2,kind:'braking',point_t:102,peak:3.5,threshold:3.5},
+    {id:3,kind:'shock',point_t:101,peak:.9,threshold:.5},
+  ]};
+  h.app.setData(data);h.app.state.device={id:'SN1',rules:{version:1,accel_ms2:3,brake_ms2:3.5,shock_g:.5},mount_confirmed:true};h.app.setView('signals');
+  const acceleration=h.calls.options.get('signalAccelerationChart'),accelerationLine=acceleration.series[0];
+  assert.deepEqual(Array.from(accelerationLine.data.filter(row=>Number.isFinite(row[1])).map(row=>row[1])),[4,-3.5]);
+  assert.deepEqual(Array.from(accelerationLine.markLine.data.map(line=>line.yAxis)),[3,-3.5]);
+  assert.deepEqual(Array.from(acceleration.series[1].data.map(row=>row[1])),[4,-3.5]);
+  assert.match(h.node('signalAccelerationNote').textContent,/2 个速度变化率点/);assert.match(h.node('signalAccelerationNote').textContent,/2 项事件峰值/);
+  const shock=h.calls.options.get('signalShockChart'),shockLine=shock.series[0];
+  assert.deepEqual(Array.from(shockLine.data.map(row=>row[1])),[.4,.85]);assert.equal(shockLine.markLine.data[0].yAxis,.8);assert.equal(shock.series[1].data[0][1],.9);
+  assert.match(h.node('signalShockNote').textContent,/0\.80 g 参考线/);assert.match(h.node('signalShockNote').textContent,/2 个三轴合成峰值偏差时间桶/);
 });
 
 test('quality page explains conservative automatic exit and keeps manual close admin-only',async()=>{
