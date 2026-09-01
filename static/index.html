@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#102f29"><title>CGI 车载数据服务 · CTMC Quality OS</title>
-  <link rel="stylesheet" href="./vendor/leaflet.css?v=a78371028241"><link rel="stylesheet" href="./style.css?v=7ff828a2bd7f">
+  <link rel="stylesheet" href="./vendor/leaflet.css?v=a78371028241"><link rel="stylesheet" href="./style.css?v=cb5f2f4b0ec2">
   <script defer src="./vendor/leaflet.js?v=db49d009c841"></script><script defer src="./vendor/echarts.min.js?v=b66b25aeb4df"></script><script defer src="./vendor/coordtransform.js?v=e941a1a5825c"></script>
   <script defer src="./map.js?v=5e1771241c19"></script>
-  <script defer src="./app.js?v=271a3a4ea39a"></script>
+  <script defer src="./app.js?v=95aa1f2a5bbc"></script>
 </head>
 <body>
 <aside class="rail">
@@ -54,7 +54,7 @@
       </section>
       <section class="panel snapshot-panel"><div class="panel-head"><div><p class="eyebrow">LIVE / DEVICE SNAPSHOT</p><h2>设备最新状态</h2></div><span id="deviceOnline" class="status-pill">--</span></div><div id="deviceSnapshot"></div><div class="mini-compass"><div class="compass-grid"><span class="north">N</span><span class="east">E</span><span class="south">S</span><span class="west">W</span><div id="headingNeedle" class="needle">▲</div></div><div><small>航向角</small><strong id="headingValue">--<em>°</em></strong><span id="headingNote">请先完成惯导初始化</span></div></div><div id="warningSummary" class="warning-summary"></div></section>
     </div>
-    <section class="panel speed-panel"><div class="panel-head"><div><p class="eyebrow">03 / MOTION PROFILE</p><h2>速度剖面 <span class="h2-unit">km/h · 浅黄色区间为缺测</span></h2></div><button class="text-button" data-goto="signals">全部惯导信号 ↗</button></div><div class="chart speed-chart" id="speedChart"></div></section>
+    <section class="panel speed-panel"><div class="panel-head"><div><p class="eyebrow">03 / MOTION PROFILE</p><h2>速度剖面 <span class="h2-unit">km/h · 浅黄色区间为缺测</span> <span class="threshold-key"><i aria-hidden="true"></i>虚线：报警阈值</span></h2></div><button class="text-button" data-goto="signals">全部惯导信号 ↗</button></div><div class="chart speed-chart" id="speedChart"></div></section>
     <section class="panel vibration-panel vibration-overview vibration-range" aria-labelledby="overviewVibrationTitle">
       <div class="vibration-head"><div><p class="eyebrow">04 / VIBRATION RANGE</p><h2 id="overviewVibrationTitle">筛选时段振动曲线 <span class="h2-unit">10 Hz 输入 · 分层聚合</span></h2><p>覆盖当前筛选时间；曲线按等时桶给出动态 RMS、峰值偏差和样本数，悬停可读取具体值。</p></div><span id="overviewVibrationState" class="status-pill">等待采样</span></div>
       <div class="vibration-metrics" id="overviewVibrationMetrics" aria-live="polite"></div>
@@ -63,7 +63,7 @@
     </section>
     <div class="bottom-grid"><section class="panel"><div class="panel-head"><div><p class="eyebrow">OPERATIONS</p><h2>行程与停留</h2></div><span class="muted">连续 ≥30 秒的区段</span></div><div id="segments"></div></section><section class="panel"><div class="panel-head"><div><p class="eyebrow">ATTENTION</p><h2>需要关注</h2></div><button class="text-button" data-goto="events">全部事件 ↗</button></div><div id="eventPreview"></div></section></div>
   </section>
-  <section id="signalsView" class="view" hidden><div class="section-intro"><div><h2>惯导信号工作台</h2><p>全部曲线先过滤再聚合；深色为有效值均值，浅色保留有效最小与最大值。不可用字段留空，不补零、不插值。静止残差不是实际运动。</p></div><span id="aggregationLabel" class="status-pill"></span></div>
+  <section id="signalsView" class="view" hidden><div class="section-intro"><div><h2>惯导信号工作台</h2><p>全部曲线先过滤再聚合；深色为有效值均值，浅色保留有效最小与最大值。不可用字段留空，不补零、不插值。<span class="threshold-key"><i aria-hidden="true"></i>虚线为当前报警阈值</span>；静止残差不是实际运动。</p></div><span id="aggregationLabel" class="status-pill"></span></div>
     <section class="panel vibration-panel vibration-analysis vibration-range" aria-labelledby="signalVibrationTitle">
       <div class="vibration-head"><div><p class="eyebrow">04 / VIBRATION RANGE</p><h2 id="signalVibrationTitle">筛选时段振动曲线 <span class="h2-unit">10 Hz 输入 · 分层聚合</span></h2><p>与运行总览使用同一筛选时间和同一批动态振动幅值；末端频谱继续取连续原始窗。</p></div><span id="signalVibrationState" class="status-pill">等待采样</span></div>
       <div class="vibration-metrics" id="signalVibrationMetrics" aria-live="polite"></div>

@@ -171,6 +171,25 @@ test('10 Hz vibration spotlight renders bounded waveform, RMS and 0-4 Hz spectru
   assert.match(h.calls.options.get('overviewVibrationTimeChart').graphic[0].style.text,/所选时段无采样/);
 });
 
+test('overview and inertial curves draw dashed alarm thresholds for direct channels',async()=>{
+  const h=await appHarness(),params=new URLSearchParams({start:'100',end:'200',device:'SN1'}),rules={version:1,speed_kmh:80,age_s:10,roll_deg:15,pitch_deg:12,position_std_m:2,shock_g:.5};
+  h.app.setData(queryFixture(params));h.app.state.device={id:'SN1',rules,mount_confirmed:true};
+  h.app.renderOverview();
+  const speed=h.calls.options.get('speedChart'),speedLine=speed.series.find(s=>s.name==='车辆速度');
+  assert.equal(speedLine.markLine.lineStyle.type,'dashed');assert.equal(speedLine.markLine.data[0].yAxis,80);
+  const overviewVibration=h.calls.options.get('overviewVibrationTimeChart');
+  assert.equal(overviewVibration.series[1].markLine.lineStyle.type,'dashed');assert.equal(overviewVibration.series[1].markLine.data[0].yAxis,.5);
+  h.app.setView('signals');
+  const pitch=h.calls.options.get('signal-0').series.find(s=>s.name==='俯仰');
+  assert.deepEqual(Array.from(pitch.markLine.data,map=>map.yAxis),[12,-12]);
+  const position=h.calls.options.get('signal-4').series.find(s=>s.name==='纬度 σ');
+  assert.equal(position.markLine.data[0].yAxis,2);
+  const age=h.calls.options.get('signal-9').series.find(s=>s.name==='差分延迟');
+  assert.equal(age.markLine.data[0].yAxis,10);
+  assert.match(h.node('signal-note-1').textContent,/本组无可直接映射的水平报警阈值/);
+  assert.match(h.node('signalVibrationNote').textContent,/冲击候选参考线 0\.50 g/);
+});
+
 test('quality page explains conservative automatic exit and keeps manual close admin-only',async()=>{
   const h=await appHarness(),anchor={lat:31.2456,lon:121.616};
   h.app.state.canManage=true;

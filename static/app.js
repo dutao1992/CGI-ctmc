@@ -197,7 +197,7 @@ function renderOverview(){
   $('kpis').innerHTML=cards.map(([k,v,u,n])=>`<div class="kpi"><div class="kpi-label">${k}</div><div class="kpi-value">${d.total?v:'—'}<small>${u}</small></div><div class="kpi-note">${d.total?n:'所选时段无采样'}</div></div>`).join('');
   $('segments').innerHTML=d.segments.length?d.segments.slice(0,8).map(s=>`<div class="compact-row"><div><strong>${s.state==='confirmed_stationary'?'已确认静止':s.state==='moving'?'运行区段':s.state==='stopped'?'停留区段':'测量不可用'}</strong><small>${clock(s.start)} — ${clock(s.end)}</small></div><span>${duration(s.end-s.start)} · ${number(s.distance_m/1000,2)} km</span></div>`).join(''):'<div class="empty">暂无持续 30 秒以上的连续区段<br>不将静止定位漂移计作运行里程</div>';
   $('eventPreview').innerHTML=d.events.items.length?d.events.items.slice(0,5).map(e=>`<div class="compact-row"><div class="event-kind"><div><strong>${esc(e.label)}</strong><small>${clock(e.start)} — ${clock(e.end)} · ${duration(e.end-e.start)}</small></div></div><button class="text-button" data-event-locate="${e.id}">定位 ↗</button></div>`).join(''):'<div class="empty">所选时段没有触发已启用的规则</div>';
-  buildChart('speedChart',[['speed',stationary?'静止速度残差':'车辆速度','km/h',3.6]],{compact:true,threshold:stationary?undefined:state.device.rules.speed_kmh});
+  buildChart('speedChart',[['speed',stationary?'静止速度残差':'车辆速度','km/h',3.6]],{compact:true,stationary,threshold:stationary?undefined:state.device.rules.speed_kmh});
   renderVibration('overview',VIBRATION_VIEW_MODE);
 }
 function initializeMap(){
@@ -271,6 +271,33 @@ function chartData(metric,multiplier,index){
   state.chartCache.set(cacheKey,out);
   return out;
 }
+const chartAlarmRules={
+  speed:{rule:'speed_kmh',unit:'km/h',mode:'upper',label:'速度报警上限'},
+  age:{rule:'age_s',unit:'s',mode:'upper',label:'差分延迟报警上限'},
+  pitch:{rule:'pitch_deg',unit:'°',mode:'symmetric',label:'俯仰报警边界'},
+  roll:{rule:'roll_deg',unit:'°',mode:'symmetric',label:'横滚报警边界'},
+  lat_std:{rule:'position_std_m',unit:'m',mode:'upper',label:'纬度 σ 报警上限'},
+  lon_std:{rule:'position_std_m',unit:'m',mode:'upper',label:'经度 σ 报警上限'}
+};
+function chartAlarmLines(key,multiplier=1,options={}){
+  if(options.stationary&&key==='speed')return [];
+  const spec=chartAlarmRules[key],deviceRules=state.device?.rules||{};
+  if(!spec)return [];
+  const raw=key==='speed'&&Number.isFinite(options.threshold)?options.threshold:deviceRules[spec.rule];
+  if(!Number.isFinite(+raw))return [];
+  // Device rules are stored in the same display units as these charts
+  // (including speed_kmh), so the series multiplier must not be applied again.
+  const value=+raw,precision=Math.abs(value)>=10?1:2,text=`${number(value,precision)} ${spec.unit}`;
+  const line=(yAxis,label,position)=>({yAxis,label:{formatter:`${label} ${text}`,position}});
+  if(spec.mode==='symmetric')return [line(value,spec.label+' +','insideEndTop'),line(-value,spec.label+' −','insideStartBottom')];
+  return [line(value,spec.label,'insideEndTop')];
+}
+function chartAlarmSummary(metrics,options={}){
+  const names=[];
+  metrics.forEach(([key,mLabel,unit,multiplier=1])=>chartAlarmLines(key,multiplier,options).length&&names.push(mLabel));
+  const direct=names.length?`虚线为${names.join('、')}的当前报警阈值。`:'本组无可直接映射的水平报警阈值。';
+  return `${direct}急加减速按速度变化率判定，冲击按三轴合成比力判定，不用水平线误标。`;
+}
 function chartClock(ms){
   const t=ms/1000;
   return state.data&&inputTime(state.data.start).slice(0,10)!==inputTime(state.data.end).slice(0,10)?inputTime(t).slice(5,10)+'\n'+clock(t):clock(t);
@@ -281,10 +308,11 @@ function buildChart(id,metrics,options={}){
   if(!chart){chart=echarts.init(element,null,{renderer:'canvas'});state.charts.push(chart);}
   const series=[];
   metrics.forEach(([key,label,unit,multiplier=1],i)=>{
+    const alarmLines=chartAlarmLines(key,multiplier,options);
     if(!['heading','course'].includes(key))for(const index of [2,3])series.push({name:label+(index===2?' · 最小':' · 最大'),type:'line',data:chartData(key,multiplier,index),showSymbol:false,progressive:2000,progressiveThreshold:3000,lineStyle:{width:1,opacity:.3},itemStyle:{color:colors[i%3]},connectNulls:false,emphasis:{disabled:true},silent:true});
     series.push({name:label,type:'line',data:chartData(key,multiplier,1),showSymbol:false,progressive:2000,progressiveThreshold:3000,lineStyle:{width:1.7},itemStyle:{color:colors[i%3]},connectNulls:false,
       markArea:i===0?{silent:true,itemStyle:{color:'#cf9b4315'},label:{show:false},data:(state.data.gaps||[]).map(g=>[{xAxis:g[0]*1000},{xAxis:g[1]*1000}])}:undefined,
-      markLine:options.threshold?{symbol:'none',label:{formatter:'业务阈值 '+options.threshold,fontSize:9,color:'#b2854d'},lineStyle:{type:'dashed',color:'#be935c'},data:[{yAxis:options.threshold}]}:undefined});
+      markLine:alarmLines.length?{symbol:'none',label:{fontSize:9,color:'#a76b3d',backgroundColor:'#fffaf1',padding:[2,3]},lineStyle:{type:'dashed',width:1.2,color:'#be7e46'},data:alarmLines}:undefined});
   });
   const metric=metrics[0][0];
   const eventMetric={overspeed:'speed',acceleration:'speed',braking:'speed',roll:'roll',pitch:'pitch',shock:'ax',position_std:'lat_std',diff_age:'age'};
@@ -313,8 +341,10 @@ function vibrationChart(id,kind,vibration,mode='window'){
   const common={animation:false,textStyle:{fontFamily:'PingFang SC, sans-serif'},grid:{left:52,right:20,top:rangeMode?38:18,bottom:compact?36:48},legend:rangeMode?{show:true,top:8,left:55,itemWidth:14,itemHeight:2,textStyle:{fontSize:9,color:'#788d6d'}}:{show:false},tooltip:{trigger:'axis',renderMode:'html',confine:true,backgroundColor:'#fff',borderColor:'#d4dec9',textStyle:{fontSize:10,color:'#315c45'},valueFormatter:value=>number(value,5)},graphic:[{type:'text',left:'center',top:'middle',invisible:available,style:{text:vibration?.reason||'本时段没有可用的连续振动窗',fill:'#7a8970',fontSize:11,lineHeight:20,textAlign:'center'}}]};
   if(kind==='time'){
     const rows=available?(rangeMode?vibration.series:vibration.time):[];
-    const rangeSeries=[{name:'桶内 RMS 动态幅值',type:'line',data:rows.map(row=>[row[0],row[1]]),showSymbol:false,lineStyle:{width:2,color:'#c0833c'},areaStyle:{color:'#c0833c18'},itemStyle:{color:'#c0833c'},connectNulls:false},{name:'桶内峰值偏差',type:'line',data:rows.map(row=>[row[0],row[2]]),showSymbol:false,lineStyle:{width:1.3,color:'#386f5b'},itemStyle:{color:'#386f5b'},connectNulls:false}];
-    const windowSeries=[{name:'动态合成比力',type:'line',data:rows.map(row=>[row[0],row[1]]),showSymbol:false,lineStyle:{width:1.25,color:'#386f5b'},itemStyle:{color:'#386f5b'},connectNulls:false},{name:'1 秒 RMS 包络',type:'line',data:rows.map(row=>[row[0],row[2]]),showSymbol:false,lineStyle:{width:2,color:'#c0833c'},areaStyle:{color:'#c0833c18'},itemStyle:{color:'#c0833c'},connectNulls:false}];
+    const shock=Number.isFinite(+(state.device?.rules||{}).shock_g)?+(state.device?.rules||{}).shock_g:null;
+    const shockLine=Number.isFinite(shock)?{symbol:'none',label:{formatter:`冲击候选参考线 ${number(shock,2)} g`,fontSize:9,color:'#a76b3d',backgroundColor:'#fffaf1',padding:[2,3]},lineStyle:{type:'dashed',width:1.2,color:'#be7e46'},data:[{yAxis:shock}]}:undefined;
+    const rangeSeries=[{name:'桶内 RMS 动态幅值',type:'line',data:rows.map(row=>[row[0],row[1]]),showSymbol:false,lineStyle:{width:2,color:'#c0833c'},areaStyle:{color:'#c0833c18'},itemStyle:{color:'#c0833c'},connectNulls:false},{name:'桶内峰值偏差',type:'line',data:rows.map(row=>[row[0],row[2]]),showSymbol:false,lineStyle:{width:1.3,color:'#386f5b'},itemStyle:{color:'#386f5b'},connectNulls:false,markLine:shockLine}];
+    const windowSeries=[{name:'动态合成比力',type:'line',data:rows.map(row=>[row[0],row[1]]),showSymbol:false,lineStyle:{width:1.25,color:'#386f5b'},itemStyle:{color:'#386f5b'},connectNulls:false},{name:'1 秒 RMS 包络',type:'line',data:rows.map(row=>[row[0],row[2]]),showSymbol:false,lineStyle:{width:2,color:'#c0833c'},areaStyle:{color:'#c0833c18'},itemStyle:{color:'#c0833c'},connectNulls:false,markLine:shockLine}];
     const tooltip=rangeMode?{...common.tooltip,formatter:params=>{const list=Array.isArray(params)?params:[params],first=list[0],timestamp=first?.value?.[0]??first?.data?.[0],row=rows[first?.dataIndex]||rows.find(item=>item[0]===timestamp);if(!row)return '';return `${chartClock(timestamp).replace('\n',' ')}<br/>桶内 RMS 动态幅值：${number(row[1],5)} g<br/>桶内峰值偏差：${number(row[2],5)} g<br/>均值合成比力：${number(row[3],5)} g<br/>桶内范围：${number(row[4],5)} – ${number(row[5],5)} g<br/>有效值：${number(row[6],0)} 点`;}}:common.tooltip;
     chart.setOption({...common,tooltip,xAxis:{type:'time',min:rangeMode?state.data.start*1000:(available?vibration.start*1000:state.data.start*1000),max:rangeMode?state.data.end*1000:(available?vibration.end*1000:state.data.end*1000),axisLine:{lineStyle:{color:'#dbe4d7'}},axisTick:{show:false},axisLabel:{fontSize:9,color:'#82917b',formatter:value=>chartClock(value),hideOverlap:true},splitLine:{show:false}},yAxis:{type:'value',name:'g',nameTextStyle:{fontSize:9,color:'#8b9785'},scale:true,axisLabel:{fontSize:9,color:'#82917b'},splitLine:{lineStyle:{color:'#edf1e7',type:'dashed'}}},dataZoom:compact?[]:[{type:'inside',filterMode:'none',start:0,end:100},{type:'slider',start:0,end:100,height:12,bottom:8,borderColor:'#d9e3ce',fillerColor:'#8ca97124',handleStyle:{color:'#6d9360'},textStyle:{fontSize:8}}],series:rangeMode?rangeSeries:windowSeries},true);
   }else{
@@ -326,13 +356,15 @@ function vibrationChart(id,kind,vibration,mode='window'){
 function renderVibration(prefix,mode='window'){
   const all=state.data?.vibration||{},vibration=mode==='range'?(all.range||{available:false,reason:'查询结果中没有筛选时段振动值'}):all,status=$(prefix+'VibrationState'),metrics=$(prefix+'VibrationMetrics'),note=$(prefix+'VibrationNote');
   if(!status||!metrics||!note)return;
+  const shockRule=Number.isFinite(+(state.device?.rules||{}).shock_g)?+(state.device?.rules||{}).shock_g:null;
+  const shockNote=Number.isFinite(shockRule)?` 虚线为冲击候选参考线 ${number(shockRule,2)} g；最终告警仍按三轴合成比力规则判定。`:'';
   status.className='status-pill '+(vibration.available?'good':'warn');
   if(vibration.available){
     const values=vibration.metrics;
     const cards=mode==='range'?[['筛选区间 RMS',number(values.rms_g,4),'g','桶内去均值动态幅值'],['峰值偏差',number(values.peak_g,4),'g','各桶极值偏差最大值'],['峰峰值',number(values.peak_to_peak_g,4),'g','各桶峰峰值最大值'],['有效值',number(vibration.samples,0),'点',`${number(vibration.buckets,0)} 个时间桶`]]:[['整窗 RMS',number(values.rms_g,4),'g','动态合成比力'],['峰值',number(values.peak_g,4),'g',`峰峰值 ${number(values.peak_to_peak_g,4)} g`],['波峰因数',number(values.crest_factor,2),'', '峰值 / RMS'],['主频',number(values.dominant_hz,2),'Hz',`幅值 ${number(values.dominant_amplitude_g,4)} g`]];
     status.textContent=mode==='range'?`${number(vibration.buckets,0)} 个时间桶 · ${number(vibration.samples,0)} 个有效值`:`${number(vibration.duration_s,1)} 秒连续窗 · ${number(vibration.sample_hz,2)} Hz`;
     metrics.innerHTML=cards.map(([label,value,unit,detail])=>`<div class="vibration-metric"><span>${label}</span><strong>${value}<small>${unit}</small></strong><em>${detail}</em></div>`).join('');
-    note.textContent=mode==='range'?`${stamp(vibration.start)} — ${clock(vibration.end)} · ${number(vibration.samples,0)} 个有效值 / ${number(vibration.buckets,0)} 个等时桶。悬停曲线可读取每桶 RMS 与峰值偏差；${vibration.capability}。`:`${stamp(vibration.start)} — ${clock(vibration.end)} · ${vibration.samples} 点 · 频率分辨率 ${number(vibration.frequency_resolution_hz,3)} Hz。${prefix==='signal'?vibration.method+'；'+vibration.source+'。':''}${vibration.capability}。`;
+    note.textContent=mode==='range'?`${stamp(vibration.start)} — ${clock(vibration.end)} · ${number(vibration.samples,0)} 个有效值 / ${number(vibration.buckets,0)} 个等时桶。悬停曲线可读取每桶 RMS 与峰值偏差；${vibration.capability}。${shockNote}`:`${stamp(vibration.start)} — ${clock(vibration.end)} · ${vibration.samples} 点 · 频率分辨率 ${number(vibration.frequency_resolution_hz,3)} Hz。${prefix==='signal'?vibration.method+'；'+vibration.source+'。':''}${vibration.capability}。${shockNote}`;
   }else{
     status.textContent='暂无可分析连续窗';
     metrics.innerHTML=`<div class="vibration-empty-message">${esc(vibration.reason)}</div>`;
@@ -360,9 +392,9 @@ function renderSignals(){
   if(!$('signalCharts').children.length)$('signalCharts').innerHTML=chartGroups.map(([title,unit],i)=>`<section class="panel"><div class="panel-head"><h2>${title}<span class="h2-unit">${unit}</span></h2><span class="muted">${String(i+1).padStart(2,'0')}</span></div><div class="chart" id="signal-${i}"></div><p class="signal-data-note" id="signal-note-${i}"></p></section>`).join('');
   const stationary=stationaryRange(state.data.quality?.contexts,state.data.summary.first_t,state.data.summary.last_t);
   chartGroups.forEach(([title,unit,metrics],i)=>{
-    buildChart('signal-'+i,metrics,{threshold:metrics[0][0]==='speed'&&!stationary?state.device.rules.speed_kmh:metrics[0][0]==='age'?state.device.rules.age_s:undefined});
+    buildChart('signal-'+i,metrics,{stationary,threshold:metrics[0][0]==='speed'&&!stationary?state.device.rules.speed_kmh:metrics[0][0]==='age'?state.device.rules.age_s:undefined});
     const removed=metrics.filter(([key])=>state.data.quality?.excluded_fields[key]).map(([key,label])=>`${label} ${state.data.quality.excluded_fields[key].toLocaleString()} 个值`);
-    $('signal-note-'+i).textContent=(!state.data.total?'所选时段无采样。':removed.length?'本时段已屏蔽：'+removed.join('；')+'。':'本时段这些通道无剔除值。')+(title.includes('标准差')?' 标准差用于质量诊断；持续静止状态下超限值会转入异常台账。':'')+(stationary&&metrics.some(([key])=>['speed','ve','vn','vu'].includes(key))?' 静止残余速度不代表载体在移动。':'');
+    $('signal-note-'+i).textContent=(!state.data.total?'所选时段无采样。':removed.length?'本时段已屏蔽：'+removed.join('；')+'。':'本时段这些通道无剔除值。')+' '+chartAlarmSummary(metrics,{stationary})+(title.includes('标准差')?' 标准差用于质量诊断；持续静止状态下超限值会转入异常台账。':'')+(stationary&&metrics.some(([key])=>['speed','ve','vn','vu'].includes(key))?' 静止残余速度不代表载体在移动。':'');
   });
 }
 function offlineChartData(data,metric,multiplier,index){
