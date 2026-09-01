@@ -580,15 +580,23 @@ class Ingestor:
             exit_evidence = None
         else:
             exit_evidence = self.stationary_exit.observe(p,active_context)
+        reassessed_buckets = set()
         if exit_evidence:
-            # Keep the confirmation point itself in the ordinary motion path.
-            # Earlier candidate samples remain traceable as stationary evidence;
-            # this avoids rewriting already-published history on a heuristic.
-            close_end = p['t'] - .001
+            # Confirmation is retrospective: once the full evidence window is
+            # satisfied, restore every candidate sample to the ordinary motion
+            # projection rather than losing the first 10-15 seconds of a run.
+            close_end = exit_evidence['candidate_start'] - .001
             quality.auto_close_active_context(c,active_context['id'],close_end,exit_evidence)
             self.quality_contexts = quality.contexts(c)
+            for row in c.execute('SELECT * FROM points WHERE device_id=? AND t>? AND t<? ORDER BY t,protocol',
+                                 (sn,close_end,p['t'])):
+                quality.write_assessment(c,dict(row),self.quality_contexts)
+                reassessed_buckets.add(bucket_start(row['t']))
             self.store.bump_query_cache_epoch(c)
         mask, reasons, context_id = quality.write_assessment(c,p,self.quality_contexts)
+        if reassessed_buckets:
+            reassessed_buckets.add(bucket_start(p['t']))
+            self.store.rebuild_rollup_buckets(c,sn,reassessed_buckets)
         p = quality.project(dict(p,q_version=quality.VERSION,q_mask=mask,q_reasons=reasons,q_context=context_id))
         if sn not in self.states or self.states[sn]['version'] != rules['version']:
             prev = c.execute(quality.JOIN+' WHERE p.device_id=? AND p.t<? ORDER BY p.t DESC LIMIT 1',(sn,p['t'])).fetchone()

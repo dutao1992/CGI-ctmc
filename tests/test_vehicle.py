@@ -530,6 +530,7 @@ class QualityTests(unittest.TestCase):
                               lat_std=.5,lon_std=.5,alt_std=1) for i in range(41)])
         last_t=self.t+81
         self.assertEqual(self.store.point('6094510',last_t)['speed'],.5)
+        self.assertEqual(self.store.point('6094510',self.t+61)['speed'],.5)
         with self.store.connect() as c:
             context=quality.contexts(c,'6094510')[-1]
             audit=c.execute("SELECT * FROM audit WHERE action='quality.stationary_context.auto_close'").fetchone()
@@ -544,6 +545,46 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(context['closure']['fix_mode'],9)
         self.assertEqual(audit['target'],scope['id'])
         self.assertEqual(counts,(counts[0],counts[0],counts[0]))
+
+    def test_satellite_navigation_vehicle_motion_auto_exit_is_strict_and_retrospective(self):
+        p=parse(LIVE[0]);tow=p['tow'];self.t=p['t']
+        self.ingest(*[altered(tow=tow+i*.1,speed=.05,ve=.01,vn=.01,vu=0,
+                              lat_std=1,lon_std=1,alt_std=1) for i in range(120)])
+        with self.store.connect() as c:
+            fitted=quality.build_context(c,p['device_id'],self.t,self.t+11.9,'unit-test satellite vehicle exit')
+            scope=quality.make_active(fitted,self.t,self.t+11.9)
+            quality.install_context(c,scope)
+        quality.backfill(self.store);self.ing=Ingestor(self.store,self.raw)
+        # Coherent 0.5 m/s satellite-navigation motion remains below the
+        # vehicle route and cannot weaken the combination-navigation trolley route.
+        self.ingest(*[altered(tow=tow+20+i*.5,status='91',speed=.5,ve=0,vn=.5,
+                              lat=p['lat']+.0004+i*.00000225,
+                              lat_std=.5,lon_std=.5,alt_std=1) for i in range(31)])
+        with self.store.connect() as c:self.assertTrue(quality.contexts(c,'6094510')[-1]['active'])
+        # At 3 m/s, position displacement, integrated speed and velocity vector
+        # agree for ten seconds. The full evidence window becomes ordinary data.
+        candidate_start=self.t+50
+        self.ingest(*[altered(tow=tow+50+i*.1,status='91',speed=3,ve=0,vn=3,
+                              lat=p['lat']+.0008+i*.0000027,
+                              lat_std=.5,lon_std=.5,alt_std=1) for i in range(121)])
+        with self.store.connect() as c:
+            context=quality.contexts(c,'6094510')[-1]
+            audit=c.execute("SELECT * FROM audit WHERE action='quality.stationary_context.auto_close'").fetchone()
+            detail=json.loads(audit['detail'])
+            pending=c.execute('''SELECT COUNT(*) FROM points p LEFT JOIN point_quality q
+                    ON q.device_id=p.device_id AND q.t=p.t AND q.protocol=p.protocol
+                    WHERE p.device_id=? AND p.t>=? AND (q.version IS NULL OR q.version!=?)''',
+                    ('6094510',candidate_start,quality.VERSION)).fetchone()[0]
+        self.assertFalse(context['active'])
+        self.assertAlmostEqual(context['end'],candidate_start-.001,places=3)
+        self.assertEqual(self.store.point('6094510',candidate_start)['speed'],3)
+        self.assertEqual(detail['route'],'satellite_vehicle_motion')
+        self.assertGreaterEqual(detail['duration_s'],10)
+        self.assertGreaterEqual(detail['displacement_m'],25)
+        self.assertGreaterEqual(detail['path_efficiency'],.65)
+        self.assertGreaterEqual(detail['distance_ratio'],.65)
+        self.assertLessEqual(detail['distance_ratio'],1.35)
+        self.assertEqual(pending,0)
 
     def test_missing_assessment_fails_closed_and_backfill_is_idempotent(self):
         self.ingest(LIVE[0]);t=parse(LIVE[0])['t']

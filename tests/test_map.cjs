@@ -176,13 +176,17 @@ test('quality page explains conservative automatic exit and keeps manual close a
   h.app.state.canManage=true;
   h.app.setData({quality:{version:2,total:100,anomaly_samples:2,unavailable_samples:3,pending_samples:0,reasons:[],contexts:[{
     id:'active-1',device_id:'SN1',start:100,end:null,active:true,profile:{anchor,valid_population:100,training_samples:100,position_limit_m:15,horizontal_limit_ms:.3,position_std_limit_m:5,limits:{alt:15},centers:{alt:10}},
-    auto_exit_policy:{max_position_std_m:1,min_speed_ms:.15,min_anchor_distance_m:30,min_duration_s:15,min_displacement_m:8,min_path_efficiency:.5}
+    auto_exit_policy:{max_position_std_m:1,min_speed_ms:.15,min_anchor_distance_m:30,min_duration_s:15,min_displacement_m:8,min_path_efficiency:.5,
+      vehicle_motion:{max_position_std_m:5,min_speed_ms:1,min_duration_s:10,min_displacement_m:25,min_path_efficiency:.65}}
   }]}});
   h.app.renderFilterSummary();
   assert.match(h.node('filterSummary').innerHTML,/持续静止 · 自动防护/);
-  assert.match(h.node('filterSummary').innerHTML,/组合导航、RTK 固定\/浮点/);
+  assert.match(h.node('filterSummary').innerHTML,/低速小推车路径要求组合导航/);
+  assert.match(h.node('filterSummary').innerHTML,/车辆路径允许卫导或组合导航/);
   assert.match(h.node('filterSummary').innerHTML,/0\.15 m\/s/);
-  assert.match(h.node('filterSummary').innerHTML,/轨迹有效率 ≥ 50%/);
+  assert.match(h.node('filterSummary').innerHTML,/1\.0 m\/s/);
+  assert.match(h.node('filterSummary').innerHTML,/轨迹有效率 ≥ 65%/);
+  assert.match(h.node('filterSummary').innerHTML,/速度积分与坐标位移一致/);
   assert.match(h.node('filterSummary').innerHTML,/出发前关闭静止状态/);
   h.app.state.canManage=false;h.app.renderFilterSummary();
   assert.doesNotMatch(h.node('filterSummary').innerHTML,/出发前关闭静止状态/);

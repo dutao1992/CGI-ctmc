@@ -36,6 +36,24 @@ AUTO_EXIT_POLICY = {
     # Heading readiness is not required to prove translation.  RTK fixed/float
     # positions are accepted both with and without dual-antenna direction.
     'fix_modes': [4, 5, 8, 9],
+    # A separate, substantially stronger route recovers ordinary vehicle runs
+    # when the receiver remains in satellite-navigation mode. It deliberately
+    # does not weaken the 0.5 m/s commissioning-trolley route above.
+    'vehicle_motion': {
+        'min_speed_ms': 1.0,
+        'min_duration_s': 10.0,
+        'min_samples': 20,
+        'max_gap_s': 0.3,
+        'max_position_std_m': 5.0,
+        'min_anchor_distance_m': 30.0,
+        'min_displacement_m': 25.0,
+        'min_path_efficiency': 0.65,
+        'min_distance_ratio': 0.65,
+        'max_distance_ratio': 1.35,
+        'max_velocity_error_ms': 0.75,
+        'nav_modes': [1, 2],
+        'fix_modes': [4, 5, 8, 9],
+    },
 }
 BITS = {key: 1 << i for i, key in enumerate(NUMERIC)}
 ALL_FIELDS = sum(BITS.values())
@@ -104,9 +122,16 @@ def context_for(p, scopes):
 def automatic_exit_policy(context):
     """Return the effective conservative policy for an active context."""
     policy = dict(AUTO_EXIT_POLICY)
-    policy.update(context.get('profile', {}).get('auto_exit', {}))
+    policy['vehicle_motion'] = dict(AUTO_EXIT_POLICY['vehicle_motion'])
+    overrides = context.get('profile', {}).get('auto_exit', {})
+    policy.update({key:value for key,value in overrides.items() if key != 'vehicle_motion'})
+    policy['vehicle_motion'].update(overrides.get('vehicle_motion', {}))
     policy['min_anchor_distance_m'] = max(
         float(policy['min_anchor_distance_m']),
+        2 * float(context['profile']['position_limit_m']),
+    )
+    policy['vehicle_motion']['min_anchor_distance_m'] = max(
+        float(policy['vehicle_motion']['min_anchor_distance_m']),
         2 * float(context['profile']['position_limit_m']),
     )
     return policy
@@ -118,57 +143,93 @@ class ActiveStationaryExitDetector:
         self.candidates = {}
 
     def forget(self, context_id):
-        self.candidates.pop(context_id, None)
+        for key in list(self.candidates):
+            if key[0] == context_id:
+                self.candidates.pop(key, None)
 
     def observe(self, p, context):
         if not context or context.get('kind') != 'confirmed_stationary_active' or not context.get('active'):
             return None
         policy = automatic_exit_policy(context)
+        routes = [
+            ('combined_low_speed', {key:value for key,value in policy.items() if key != 'vehicle_motion'}),
+            ('satellite_vehicle_motion', policy['vehicle_motion']),
+        ]
+        for route, route_policy in routes:
+            evidence = self._observe_route(p, context, route, route_policy)
+            if evidence:
+                self.forget(context['id'])
+                return evidence
+        return None
+
+    def _observe_route(self, p, context, route, policy):
         std = max(p.get('lat_std') if p.get('lat_std') is not None else math.inf,
                   p.get('lon_std') if p.get('lon_std') is not None else math.inf)
+        vector_speed = None
+        if p.get('ve') is not None and p.get('vn') is not None:
+            vector_speed = math.hypot(p['ve'], p['vn'])
+        velocity_error = abs(vector_speed - p['speed']) if vector_speed is not None and p.get('speed') is not None else math.inf
+        velocity_consistent = (
+            'max_velocity_error_ms' not in policy or
+            velocity_error <= max(policy['max_velocity_error_ms'], .25 * p['speed'])
+        )
         qualified = (
             p.get('valid_pos') and p.get('nav_mode') in policy['nav_modes'] and
             p.get('fix_mode') in policy['fix_modes'] and p.get('speed') is not None and
             p['speed'] >= policy['min_speed_ms'] and std <= policy['max_position_std_m'] and
+            velocity_consistent and
             p['t'] <= time.time() and
             distance(p, context['profile']['anchor']) >= policy['min_anchor_distance_m']
         )
+        key = (context['id'], route)
         if not qualified:
-            self.forget(context['id'])
+            self.candidates.pop(key, None)
             return None
-        candidate = self.candidates.get(context['id'])
+        candidate = self.candidates.get(key)
         if (candidate is None or p['t'] <= candidate['last_t'] or
                 p['t'] - candidate['last_t'] > policy['max_gap_s']):
             point = {'lat':p['lat'],'lon':p['lon']}
             candidate = dict(start_t=p['t'], last_t=p['t'], start_point=point, last_point=point,
-                             path_distance=0.0, count=1, min_speed=p['speed'], max_speed=p['speed'])
-            self.candidates[context['id']] = candidate
+                             path_distance=0.0, speed_distance=0.0, count=1,
+                             min_speed=p['speed'], last_speed=p['speed'], max_speed=p['speed'],
+                             max_position_std=std)
+            self.candidates[key] = candidate
             return None
         point = {'lat':p['lat'],'lon':p['lon']}
+        delta_t = p['t'] - candidate['last_t']
         candidate['path_distance'] += distance(candidate['last_point'], point)
+        candidate['speed_distance'] += (candidate['last_speed'] + p['speed']) / 2 * delta_t
         candidate['last_point'] = point
         candidate['last_t'] = p['t']
+        candidate['last_speed'] = p['speed']
         candidate['count'] += 1
         candidate['min_speed'] = min(candidate['min_speed'], p['speed'])
         candidate['max_speed'] = max(candidate['max_speed'], p['speed'])
+        candidate['max_position_std'] = max(candidate['max_position_std'], std)
         duration = p['t'] - candidate['start_t']
         displacement = distance(candidate['start_point'], p)
         path_efficiency = displacement / candidate['path_distance'] if candidate['path_distance'] else 0
+        distance_ratio = displacement / candidate['speed_distance'] if candidate['speed_distance'] else 0
         if (duration < policy['min_duration_s'] or candidate['count'] < policy['min_samples'] or
                 displacement < policy['min_displacement_m'] or
-                path_efficiency < policy['min_path_efficiency']):
+                path_efficiency < policy['min_path_efficiency'] or
+                distance_ratio < policy.get('min_distance_ratio', 0) or
+                distance_ratio > policy.get('max_distance_ratio', math.inf)):
             return None
         anchor_distance = distance(p, context['profile']['anchor'])
         evidence = dict(
-            detected_at=p['t'], candidate_start=candidate['start_t'], duration_s=round(duration,3),
+            route=route, detected_at=p['t'], candidate_start=candidate['start_t'], duration_s=round(duration,3),
             samples=candidate['count'], displacement_m=round(displacement,3),
             path_distance_m=round(candidate['path_distance'],3),
             path_efficiency=round(path_efficiency,3),
+            speed_distance_m=round(candidate['speed_distance'],3),
+            distance_ratio=round(distance_ratio,3),
             anchor_distance_m=round(anchor_distance,3), min_speed_ms=round(candidate['min_speed'],3),
             max_speed_ms=round(candidate['max_speed'],3), position_std_m=round(std,3),
+            max_position_std_m=round(candidate['max_position_std'],3),
+            velocity_error_ms=round(velocity_error,3) if math.isfinite(velocity_error) else None,
             nav_mode=p['nav_mode'], fix_mode=p['fix_mode'], policy=policy,
         )
-        self.forget(context['id'])
         return evidence
 
 
@@ -316,7 +377,7 @@ def make_active(scope, training_start=None, training_end=None):
     profile['limits']['alt'] = min(profile['limits']['alt'], 15.0)
     profile['position_std_limit_m'] = 5.0
     profile['altitude_std_limit_m'] = 8.0
-    profile['auto_exit'] = dict(AUTO_EXIT_POLICY)
+    profile['auto_exit'] = automatic_exit_policy({'profile':profile})
     profile['method'] = 'median + 6 × 1.4826 × MAD, engineering floors and confirmed-static quality caps'
     active.pop('id', None)
     active['id'] = hashlib.sha256(json.dumps({k:v for k,v in active.items() if k != 'active'},sort_keys=True).encode()).hexdigest()[:20]
@@ -384,7 +445,7 @@ def auto_close_active_context(c, context_id, end, evidence):
     """Close after conservative raw-sample motion confirmation and audit why."""
     return _close_active_context(
         c, context_id, end,
-        '系统确认高质量组合导航下持续离开静止锚点，自动恢复普通运动规则',
+        '系统确认高质量持续位移离开静止锚点，自动恢复普通运动规则',
         'system/automatic', 'quality.stationary_context.auto_close', evidence,
     )
 
