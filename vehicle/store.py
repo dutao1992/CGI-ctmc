@@ -380,7 +380,7 @@ class Store:
                 return self.quality_summary(sn,start,end,c)
         c = connection
         reason_counts, field_counts = collections.Counter(), collections.Counter()
-        total = excluded = anomalies = unavailable = pending = 0
+        total = excluded = anomalies = unavailable = status = pending = 0
         for r in c.execute('''SELECT q.version,q.mask,q.reasons,COUNT(*) n FROM points p LEFT JOIN point_quality q
                 ON q.device_id=p.device_id AND q.t=p.t AND q.protocol=p.protocol
                 WHERE p.device_id=? AND p.t BETWEEN ? AND ? GROUP BY q.version,q.mask,q.reasons''', (sn,start,end)):
@@ -392,15 +392,16 @@ class Store:
             excluded += n if mask else 0
             anomalies += n if reasons & quality.ANOMALY_BITS else 0
             unavailable += n if reasons & quality.UNAVAILABLE_BITS else 0
+            status += n if reasons & quality.STATUS_BITS else 0
             for key, bit in quality.REASON_BITS.items():
                 if reasons & bit: reason_counts[key] += n
             for key, bit in quality.BITS.items():
                 if mask & bit: field_counts[key] += n
         scopes = [s for s in quality.contexts(c,sn) if s['start']<=end and quality.context_end(s)>=start]
         return dict(version=quality.VERSION,total=total,excluded_samples=excluded,anomaly_samples=anomalies,
-                    unavailable_samples=unavailable,pending_samples=pending,excluded_fields=dict(field_counts),
+                    unavailable_samples=unavailable,status_samples=status,pending_samples=pending,excluded_fields=dict(field_counts),
                     reasons=[dict(code=k,label=label,category=kind,count=reason_counts[k]) for k,(label,kind) in quality.REASONS.items()],
-                    contexts=scopes,policy='按字段隔离；原始值保留，空缺不补零、不插值；数值离群与状态不可用可在同一采样重叠')
+                    contexts=scopes,policy='状态提示不屏蔽参数；仅确认静止段定位偏差隔离经纬度；原始值保留，空缺不补零、不插值')
 
     def quality_records(self, sn, start, end, reason='anomaly', offset=0, limit=50):
         if reason == 'anomaly': bits = quality.ANOMALY_BITS
@@ -410,7 +411,7 @@ class Store:
         else: raise ValueError('未知过滤原因')
         offset = max(0,min(1_000_000,int(offset))); limit = max(1,min(100,int(limit)))
         args = (sn,start,end,bits)
-        where = ' WHERE p.device_id=? AND p.t BETWEEN ? AND ? AND q.version='+str(quality.VERSION)+' AND (q.reasons & ?)!=0'
+        where = ' WHERE p.device_id=? AND p.t BETWEEN ? AND ? AND q.version='+str(quality.VERSION)+' AND q.mask!=0 AND (q.reasons & ?)!=0'
         with self.connect() as c:
             if c.execute('SELECT COUNT(*) FROM points WHERE device_id=? AND t BETWEEN ? AND ?', (sn,start,end)).fetchone()[0] > 1_000_000:
                 raise ValueError('所选范围超过 100 万条采样，请缩小时间范围')

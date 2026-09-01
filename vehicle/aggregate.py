@@ -21,6 +21,7 @@ ROLLUP_LEVELS = (60,600)
 # Bump when the payload shape changes; the deployment preflight rebuilds both
 # levels before serving queries so every bucket carries vibration statistics.
 ROLLUP_VERSION = quality.VERSION * 100 + 3
+TRACK_LIMIT = 20000
 ENDPOINT_FIELDS = list(dict.fromkeys(
     ['t','lat','lon','speed','heading','fix_mode','nav_mode','valid_pos','stationary_context','lat_std','lon_std'] + METRICS
 ))
@@ -251,13 +252,16 @@ class QueryCombiner:
         points[0]['break_before'] = not (connectable and transition['contiguous'] and not transition['jump'] and self.prev and self.prev.get('valid_pos'))
         for p in points:
             key = self._key(p['t'])
-            if p.get('break_before') or not self.track or key != self.track[-1].get('_bucket'):
-                self.track.append(dict(p,_bucket=key))
-            elif len(self.track)>1 and self.track[-1].get('tail'):
-                self.track[-1] = dict(p,_bucket=key,tail=True)
+            # Preserve every source-bucket endpoint instead of collapsing a
+            # long window to one point per display bucket.  This gives replay
+            # enough anchors to interpolate smoothly while still keeping the
+            # payload bounded.  Duplicate timestamps can occur where a raw
+            # head/tail window meets a rollup; keep the latest projection.
+            if self.track and self.track[-1]['t'] == p['t']:
+                self.track[-1] = dict(p,_bucket=key)
             else:
-                self.track.append(dict(p,_bucket=key,tail=True))
-        if len(self.track) > 12000:
+                self.track.append(dict(p,_bucket=key))
+        if len(self.track) > TRACK_LIMIT:
             self.track_truncated = True
 
     def add(self, snap):
@@ -300,7 +304,7 @@ class QueryCombiner:
 
     def quality_summary(self, contexts):
         reason_counts, field_counts = collections.Counter(),collections.Counter()
-        excluded = anomalies = unavailable = pending = 0
+        excluded = anomalies = unavailable = status = pending = 0
         for (version,mask,reasons),n in self.quality_groups.items():
             if version != quality.VERSION:
                 pending += n
@@ -308,15 +312,16 @@ class QueryCombiner:
             excluded += n if mask else 0
             anomalies += n if reasons & quality.ANOMALY_BITS else 0
             unavailable += n if reasons & quality.UNAVAILABLE_BITS else 0
+            status += n if reasons & quality.STATUS_BITS else 0
             for key,bit in quality.REASON_BITS.items():
                 if reasons & bit: reason_counts[key] += n
             for key,bit in quality.BITS.items():
                 if mask & bit: field_counts[key] += n
         scopes = [s for s in contexts if s['start']<=self.end and quality.context_end(s)>=self.start]
         return dict(version=quality.VERSION,total=self.count,excluded_samples=excluded,anomaly_samples=anomalies,
-                    unavailable_samples=unavailable,pending_samples=pending,excluded_fields=dict(field_counts),
+                    unavailable_samples=unavailable,status_samples=status,pending_samples=pending,excluded_fields=dict(field_counts),
                     reasons=[dict(code=k,label=label,category=kind,count=reason_counts[k]) for k,(label,kind) in quality.REASONS.items()],
-                    contexts=scopes,policy='按字段隔离；原始值保留，空缺不补零、不插值；数值离群与状态不可用可在同一采样重叠')
+                    contexts=scopes,policy='状态提示不屏蔽参数；仅确认静止段定位偏差隔离经纬度；原始值保留，空缺不补零、不插值')
 
     def finish(self, contexts, source, source_resolution_s, elapsed_ms):
         series = {key:[] for key in METRICS}
@@ -347,8 +352,17 @@ class QueryCombiner:
                 vibration_peak = peak if vibration_peak is None else max(vibration_peak, peak)
                 span = hi - lo
                 vibration_peak_to_peak = span if vibration_peak_to_peak is None else max(vibration_peak_to_peak, span)
+        def bounded_track(points):
+            if len(points) <= TRACK_LIMIT:
+                selected = points
+            else:
+                # Uniformly retain the whole route, including its final point,
+                # rather than slicing off the tail of a long selection.
+                selected = [points[round(i*(len(points)-1)/(TRACK_LIMIT-1))] for i in range(TRACK_LIMIT)]
+            return [dict(p) for p in selected]
+
         track = []
-        for p in self.track[:10000]:
+        for p in bounded_track(self.track):
             p = dict(p); p.pop('_bucket',None); p.pop('tail',None); track.append(p)
         segments = []
         for segment in self.segments:
@@ -374,16 +388,18 @@ class QueryCombiner:
             capability='10 Hz 仅用于 0-4 Hz 低频载体振动观察；聚合曲线用于趋势和取值，不用于轴承、齿轮等高频故障诊断',
         )
         return dict(device_id=self.device_id,start=self.start,end=self.end,total=self.count,track=track,
-                    gaps=self.gaps[:2000],track_truncated=self.track_truncated or len(self.track)>10000,
+                    gaps=self.gaps[:2000],track_truncated=self.track_truncated or len(self.track)>TRACK_LIMIT,
                     series=series,quality=self.quality_summary(contexts),segments=segments[:1000],
                     vibration_range=vibration_range,
-                    summary=dict(first_t=self.first,last_t=self.last,distance_km=self.mileage/1000,moving_s=self.moving,
-                                 covered_s=self.covered,max_kmh=self.max_speed,fixed_pct=100*self.fixed/self.count if self.count else 0,
-                                 valid_pct=100*self.valid/self.count if self.count else 0,gap_count=len(self.gaps),
-                                 fix_counts=dict(self.fix_counts),sample_hz=(self.count-1)/span if span else 0),
+            summary=dict(first_t=self.first,last_t=self.last,distance_km=self.mileage/1000,moving_s=self.moving,
+                         covered_s=self.covered,max_kmh=self.max_speed,fixed_pct=100*self.fixed/self.count if self.count else 0,
+                         valid_pct=100*self.valid/self.count if self.count else 0,gap_count=len(self.gaps),
+                         track_points=len(track),
+                         fix_counts=dict(self.fix_counts),sample_hz=(self.count-1)/span if span else 0),
                     aggregation=dict(buckets=len(self.groups),bucket_s=(self.end-self.start)/self.bins,
                                      source=source,source_resolution_s=source_resolution_s,query_ms=round(elapsed_ms,1),cache_hit=False,
-                                     method='先按字段过滤再计算等时桶均值/最小/最大；不插值；长窗口分层读取可重建的 60 秒或 10 分钟聚合，首尾读取原始采样；已确认静止区段不画漂移轨迹；剔除原值见数据质量',
+                                     track_points=len(track),track_limit=TRACK_LIMIT,track_truncated=self.track_truncated or len(self.track)>TRACK_LIMIT,
+                                     method='先按 v3 规则隔离确认静止段定位偏差经纬度，再计算等时桶均值/最小/最大；不插值；长窗口分层读取可重建的 60 秒或 10 分钟聚合，首尾读取原始采样；状态提示不屏蔽参数，剔除原值见数据质量',
                                      timezone='Asia/Shanghai',coordinates='WGS84 原始坐标；前端高德底图单独转换为 GCJ-02 展示',
                                      mileage='有效定位且连续速度≥3.6 km/h 时的速度梯形积分；缺测不外推，非 CAN 里程'))
 

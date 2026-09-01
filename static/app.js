@@ -153,7 +153,7 @@ async function runQueries(){
       $('aggregationLabel').textContent=`${aggregation.buckets||0} 个时间桶 · 已过滤${resolution}${timing}${aggregation.cache_hit?' · 缓存':''}`;
       const q=data.quality;
       $('filterBanner').hidden=!q;
-      if(q)$('filterBanner').innerHTML=`<div><strong>有效测量视图 · 过滤 v${q.version}</strong><span>${q.total.toLocaleString()} 条原始采样中，${q.anomaly_samples.toLocaleString()} 条含数值离群，${q.unavailable_samples.toLocaleString()} 条含不可用字段；两类可重叠。健康字段继续展示。${q.pending_samples?` ${q.pending_samples} 条待判定，测量暂不展示。`:''}</span></div><button class="text-button" data-goto="quality">查看剔除原值 ↗</button>`;
+      if(q)$('filterBanner').innerHTML=`<div><strong>有效测量视图 · 过滤 v${q.version}</strong><span>${q.total.toLocaleString()} 条原始采样中，${q.anomaly_samples.toLocaleString()} 条含静止定位偏差，${(q.status_samples||0).toLocaleString()} 条有导航状态提示；状态提示不屏蔽参数，只有异常经纬度被隔离。${q.pending_samples?` ${q.pending_samples} 条待判定，测量暂不展示。`:''}</span></div><button class="text-button" data-goto="quality">查看剔除原值 ↗</button>`;
       renderOverview();renderEvents();renderMap();
       if(state.view==='signals')renderSignals();
       if(state.view==='quality')renderQuality();
@@ -227,9 +227,10 @@ function renderMap(){
     const p=nearestPoint(e.point_t);
     if(p&&Math.abs(p.t-e.point_t)<Math.max(3,state.data.aggregation.bucket_s))L.circleMarker(mapLatLng(p),{radius:4,color:'#be8341',weight:2,fillOpacity:.5}).addTo(eventLayer).bindTooltip(esc(e.label)+' · '+clock(e.start)).on('click',()=>locateEvent(e.id));
   }
-  $('timeline').min=state.data.summary.first_t||0;$('timeline').max=state.data.summary.last_t||0;$('timeline').step=.1;$('timeline').disabled=!points.length;$('playBtn').disabled=!points.length;
+  const motionPoints=points.filter(point=>!point.stationary_context);
+  $('timeline').min=state.data.summary.first_t||0;$('timeline').max=state.data.summary.last_t||0;$('timeline').step=.1;$('timeline').disabled=!points.length;$('playBtn').disabled=motionPoints.length<2;
   if(!points.length)$('playTime').textContent='--:--:--';
-  $('coordinateReadout').textContent=points.length?'等待选定有效采样':'本时段无有效位置，未绘制轨迹';
+  $('coordinateReadout').textContent=points.length?`等待选定有效采样 · ${points.length.toLocaleString()} 个回放锚点`:'本时段无有效位置，未绘制轨迹';
   const stationaryScopes=state.data.quality?.contexts||[];
   $('stationaryMapNote').hidden=!stationaryScopes.length;
   $('stationaryMapNote').textContent='已确认静止的区段仅标示稳健估计位置，不连接定位漂移。地图点不是实测真值；下方坐标为当前保留采样，不能按厘米级精度解读。';
@@ -246,12 +247,31 @@ function nearestPoint(t){
   while(lo<hi){const m=(lo+hi)>>1;if(list[m].t<t)lo=m+1;else hi=m;}
   return lo>0&&Math.abs(list[lo-1].t-t)<Math.abs(list[lo].t-t)?list[lo-1]:list[lo];
 }
+function playbackPoint(t){
+  const list=state.data?.track||[];if(!list.length)return null;
+  let hi=0;while(hi<list.length&&list[hi].t<t)hi++;
+  if(!hi)return list[0];
+  if(hi>=list.length)return list.at(-1);
+  const left=list[hi-1],right=list[hi];
+  if(right.t===t)return right;
+  // Never draw a synthetic position across an explicit route break, a
+  // confirmed-stationary estimate, or a recorded data gap.
+  if(left.stationary_context||right.stationary_context||right.break_before||
+     (state.data.gaps||[]).some(g=>g[0]<t&&t<g[1]))return nearestPoint(t);
+  if(![left.lat,left.lon,right.lat,right.lon].every(Number.isFinite))return nearestPoint(t);
+  const span=right.t-left.t;
+  if(!(span>0))return nearestPoint(t);
+  const ratio=Math.max(0,Math.min(1,(t-left.t)/span));
+  return {...left,t,lat:left.lat+(right.lat-left.lat)*ratio,lon:left.lon+(right.lon-left.lon)*ratio,
+          speed:Number.isFinite(left.speed)&&Number.isFinite(right.speed)?left.speed+(right.speed-left.speed)*ratio:nearestPoint(t)?.speed,
+          _interpolated:true};
+}
 function selectTime(t){
   state.playT=t;$('timeline').value=t;$('playTime').textContent=clock(t);
-  const p=nearestPoint(t);
-  if(p){playMarker?.setLatLng(mapLatLng(p));$('coordinateReadout').textContent=`${number(p.lon,7)}° E / ${number(p.lat,7)}° N · ${number(kmh(p.speed),2)} km/h${p.stationary_context?' · 静止残差':''}${Math.abs(p.t-t)>3?' · 邻近采样（当前时刻可能缺测）':''}`;}
+  const p=playbackPoint(t);
+  if(p){playMarker?.setLatLng(mapLatLng(p));$('coordinateReadout').textContent=`${number(p.lon,7)}° E / ${number(p.lat,7)}° N · ${number(kmh(p.speed),2)} km/h${p.stationary_context?' · 静止残差':''}${p._interpolated?' · 回放插值':''}${Math.abs(p.t-t)>3&&!p._interpolated?' · 邻近采样（当前时刻可能缺测）':''}`;}
 }
-function stopPlay(){state.playing=false;$('playBtn').textContent='▶';$('playBtn').setAttribute('aria-label','播放轨迹');}
+function stopPlay(){state.playing=false;lastTick=0;$('playBtn').textContent='▶';$('playBtn').setAttribute('aria-label','播放轨迹');}
 let lastTick=0;
 function playbackTick(now){
   if(!state.playing)return;
@@ -584,7 +604,7 @@ const fieldUnits={lat:'°',lon:'°',alt:'m',speed:'m/s',ve:'m/s',vn:'m/s',vu:'m/
 function renderFilterSummary(){
   const q=state.data?.quality;
   if(!q){$('filterSummary').innerHTML='<div class="empty">查询设备后显示过滤统计</div>';return;}
-  const cards=[['原始采样',q.total,'原值保留，不物理删除'],['含数值离群的采样',q.anomaly_samples,'仅屏蔽命中字段，健康字段保留'],['含不可用字段的采样',q.unavailable_samples,'含初始化、未定向、低速航迹角']];
+  const cards=[['原始采样',q.total,'原值保留，不物理删除'],['静止定位偏差采样',q.anomaly_samples,'仅屏蔽确认静止段的异常经纬度'],['导航状态提示采样',q.status_samples||0,'初始化、未定向、低速航迹角均保留显示']];
   const scopes=q.contexts.map(c=>{
     const automatic=c.closure?.action==='quality.stationary_context.auto_close',policy=c.auto_exit_policy,vehicle=policy?.vehicle_motion;
     const status=c.active?'持续静止 · 自动防护':automatic?'已自动恢复运动规则':'用户确认静止';
@@ -593,9 +613,9 @@ function renderFilterSummary(){
       : automatic?`系统于 ${sampleStamp(c.closure.detected_at||c.end)} 确认持续运动后自动关闭；普通运动规则已恢复。`:'仅此区间使用静止参考。';
     return `<article class="stationary-reference"><div><span class="status-pill ${automatic?'warn':'good'}">${status}</span><strong>SN ${esc(c.device_id)}</strong><p>${sampleStamp(c.start)} — ${c.active?'至今（持续生效）':sampleStamp(c.end)} · 北京时间</p><p>中位数估计位置 ${number(c.profile.anchor.lon,7)}° E / ${number(c.profile.anchor.lat,7)}° N。${lifecycle}</p>${c.active&&state.canManage?`<div class="stationary-actions"><button class="button secondary" data-close-stationary="${esc(c.id)}">出发前关闭静止状态</button></div>`:''}</div><details><summary>查看参考和阈值 · v${q.version}</summary><p>从 ${c.profile.valid_population.toLocaleString()} 条非初始化有效定位采样中等间距取 ${c.profile.training_samples.toLocaleString()} 条训练；参考使用中位数、MAD 和噪声下限。阈值是工程判据，不是运输行业强制限值。</p><p>距锚点上限 ${number(c.profile.position_limit_m,2)} m；水平速度绝对值上限 ${number(c.profile.horizontal_limit_ms,3)} m/s${c.profile.position_std_limit_m?`；水平定位 σ 上限 ${number(c.profile.position_std_limit_m,1)} m`:''}。</p><div class="table-scroll"><table><thead><tr><th>通道</th><th>参考值</th><th>最大允许偏差</th></tr></thead><tbody>${Object.entries(c.profile.limits).filter(([k])=>!['speed','ve','vn'].includes(k)).map(([k,v])=>`<tr><td>${esc(k)} · ${esc(fieldUnits[k]||'')}</td><td>${number(k==='vu'?0:c.profile.centers[k],4)}</td><td>${number(v,4)}</td></tr>`).join('')}</tbody></table></div><p>重力与安装姿态基线保留；离群仅表示与静止参考不一致，是否为实际振动需复核原值。</p></details></article>`;
   }).join('');
-  $('filterSummary').innerHTML=`<div class="quality-grid filter-counts">${cards.map(([label,value,note])=>`<section class="panel"><h3>${label}</h3><strong>${value.toLocaleString()}</strong><p>${note}</p></section>`).join('')}</div>${scopes||'<p class="scope-note">当前时段未设置静止事实。只应用导航有效性、定向和低速航迹角检查，不把真实运动当作静止异常。</p>'}<p class="scope-note">同一采样可同时含离群和不可用字段，分类数不能相加。${q.pending_samples?`${q.pending_samples} 条待判定，测量已暂时屏蔽。`:''}查看和导出采用页面上方已查询的设备及时间范围。</p>`;
+  $('filterSummary').innerHTML=`<div class="quality-grid filter-counts">${cards.map(([label,value,note])=>`<section class="panel"><h3>${label}</h3><strong>${value.toLocaleString()}</strong><p>${note}</p></section>`).join('')}</div>${scopes||'<p class="scope-note">当前时段未设置静止事实。初始化、定向未就绪、静止或低速航迹角均保留；只在确认静止且定位偏差超限时屏蔽经纬度。</p>'}<p class="scope-note">状态提示不等同于被剔除字段；静止定位偏差只屏蔽经纬度，其他参数继续保留。${q.pending_samples?`${q.pending_samples} 条待判定，测量暂不展示。`:''}查看和导出采用页面上方已查询的设备及时间范围。</p>`;
   const select=$('qualityReason'),selected=select.value||'anomaly';
-  select.innerHTML='<option value="anomaly">数值离群（待复核）</option><option value="unavailable">状态不可用</option><option value="all">全部剔除字段</option>'+q.reasons.map(r=>`<option value="${r.code}">${esc(r.label)} · ${r.count.toLocaleString()} 条</option>`).join('');
+  select.innerHTML='<option value="anomaly">静止定位偏差（待复核）</option><option value="all">全部剔除字段</option>'+q.reasons.filter(r=>r.count&&r.category==='anomaly').map(r=>`<option value="${r.code}">${esc(r.label)} · ${r.count.toLocaleString()} 条</option>`).join('');
   select.value=selected;
 }
 async function loadQuarantine(){
@@ -641,7 +661,7 @@ function renderQuality(){
   const aggregate=h.aggregation||{},aggregateLevels=aggregate.levels||[];
   const aggregateDetail=aggregateLevels.map(level=>`${level.resolution_s===600?'10 分钟':level.resolution_s+' 秒'} ${level.buckets.toLocaleString()} 桶`).join(' + ');
   const cards=[['采集器心跳',h.ok?'运行正常':'需要检查',stamp(h.heartbeat)],['累计有效导航采样',(c.points||0).toLocaleString(),'仅校验通过且识别 SN 的 GPCHC(X)'],['长时查询聚合',(aggregate.raw_points||0).toLocaleString()+ ' 条',`${aggregateDetail||'等待建立聚合'} · ${aggregate.ready?'各层覆盖正常':'需要重建'}`],['有效 ASCII 报文',valid.toLocaleString(),'包括辅助定位报文；不表示全部字节已解码'],['被拒绝报文',rejected.toLocaleString(),'含坏校验、字段错误、无 SN 和时间无效'],['服务数据库',formatBytes(h.db_bytes),`可用磁盘 ${formatBytes(h.disk_free_bytes)}`],['待续读 / 尾部片段',formatBytes(h.pending_bytes),'包含未闭合帧，不等同于有效导航积压'],['服务器磁盘占用',number(h.disk?.used_pct,1)+'%',`达到 ${policy.trigger_pct}% 开始清理，目标 ${policy.target_pct}%`],['自动清理状态',retentionText,retention?`最近检查 ${stamp(retention.checked_at)} · 本次删除 ${retention.deleted_points||0} 条采样 / ${retention.files_completed||0} 个文件`:'等待服务器定时任务首次回执'],['最短保护期',policy.protect_hours+' 小时','同时保护当日目录、打开中的文件和未处理积压；设备配置与审计保留']];
-  $('qualityContent').innerHTML=`<div class="section-intro"><div><h2>采集与存储状态</h2><p>全局实时累计状态，不随设备或历史时间筛选变化。</p></div></div><div class="quality-grid">${cards.map(([k,v,n])=>`<section class="panel"><h3>${k}</h3><strong>${esc(v)}</strong><p>${esc(n)}</p></section>`).join('')}</div><section class="panel quality-details"><div class="panel-head"><h2>数据解释与处理边界</h2></div><table><tbody><tr><td>设备时间</td><td>GPS 周 + 周秒 → UTC → 北京时间；文件写入时间只能近似接收时间，不能据此宣称精确链路延迟。</td></tr><tr><td>位置与地图</td><td>采用高德国内道路底图；轨迹、事件和回放统一做 WGS84 → GCJ-02 显示转换。数据库、坐标读数及 CSV 保持原始 WGS84；显示转换不用于厘米级测量。定位失效、超过 3 秒缺测或疑似位置跳变时断开轨迹。</td></tr><tr><td>惯导与姿态</td><td>航向北偏东为正；俯仰车头上扬为正；横滚右倾为正。加速度保留重力分量。安装未确认前不输出姿态业务预警。</td></tr><tr><td>原始混合流</td><td>已读取 ${formatBytes(c.read_bytes||0)}；${formatBytes(c.unparsed_bytes||0)} 为二进制、非标准帧或片段，原文件按容量策略留存。无 SN 的 GPCHC 不按 IP 猜测归属。</td></tr><tr><td>安全边界</td><td>SN 用作逻辑设备身份，当前公网 TCP 未提供密码鉴权，不等同于设备真实性认证；生产扩展建议专网/VPN或认证网关。</td></tr><tr><td>查询与留存</td><td>图表单次最多 31 天；6 小时至 2 天优先使用 60 秒聚合，2 天以上使用 10 分钟聚合，首尾仍读原始采样。聚合按设备、分辨率核验，未就绪时只对不超过 100 万条的范围安全回退。CSV 最多 10 万条，异常原值超过 100 万条需分段查看。每小时检查，磁盘达到 ${policy.trigger_pct}% 后按接收日期从旧到新清理原始文件、关联采样和各层聚合，目标 ${policy.target_pct}%；保护至少最近 ${policy.protect_hours} 小时。已删除数据不可恢复，需长期留档请提前导出或另行备份。</td></tr></tbody></table></section>`;
+  $('qualityContent').innerHTML=`<div class="section-intro"><div><h2>采集与存储状态</h2><p>全局实时累计状态，不随设备或历史时间筛选变化。</p></div></div><div class="quality-grid">${cards.map(([k,v,n])=>`<section class="panel"><h3>${k}</h3><strong>${esc(v)}</strong><p>${esc(n)}</p></section>`).join('')}</div><section class="panel quality-details"><div class="panel-head"><h2>数据解释与处理边界</h2></div><table><tbody><tr><td>设备时间</td><td>GPS 周 + 周秒 → UTC → 北京时间；文件写入时间只能近似接收时间，不能据此宣称精确链路延迟。</td></tr><tr><td>位置与地图</td><td>采用高德国内道路底图；轨迹、事件和回放统一做 WGS84 → GCJ-02 显示转换。数据库、坐标读数及 CSV 保持原始 WGS84；显示转换不用于厘米级测量。无定位时不绘制坐标轨迹，但不再屏蔽其他参数；超过 3 秒缺测或疑似位置跳变时断开轨迹。</td></tr><tr><td>质量过滤</td><td>导航初始化、定向未就绪、静止或低速航迹角只作为状态提示，原值保留。确认静止段仅在定位偏差超过静止参考时屏蔽经纬度，其他速度、姿态、角速度、比力和质量参数继续展示。</td></tr><tr><td>惯导与姿态</td><td>航向北偏东为正；俯仰车头上扬为正；横滚右倾为正。加速度保留重力分量。安装未确认前不输出姿态业务预警。</td></tr><tr><td>原始混合流</td><td>已读取 ${formatBytes(c.read_bytes||0)}；${formatBytes(c.unparsed_bytes||0)} 为二进制、非标准帧或片段，原文件按容量策略留存。无 SN 的 GPCHC 不按 IP 猜测归属。</td></tr><tr><td>安全边界</td><td>SN 用作逻辑设备身份，当前公网 TCP 未提供密码鉴权，不等同于设备真实性认证；生产扩展建议专网/VPN或认证网关。</td></tr><tr><td>查询与留存</td><td>图表单次最多 31 天；6 小时至 2 天优先使用 60 秒聚合，2 天以上使用 10 分钟聚合，首尾仍读原始采样。聚合按设备、分辨率核验，未就绪时只对不超过 100 万条的范围安全回退。CSV 最多 10 万条，异常原值超过 100 万条需分段查看。每小时检查，磁盘达到 ${policy.trigger_pct}% 后按接收日期从旧到新清理原始文件、关联采样和各层聚合，目标 ${policy.target_pct}%；保护至少最近 ${policy.protect_hours} 小时。已删除数据不可恢复，需长期留档请提前导出或另行备份。</td></tr></tbody></table></section>`;
   if(retentionStale){error('未收到最近 90 分钟内的存储检查回执，请管理员检查服务器定时任务。');}
   else if(retention.warning){error('存储清理：'+retention.warning);}
   else if(h.disk_free_bytes<5*1073741824){error('服务器可用空间低于 5 GB；自动清理仅限符合条件的旧车载数据，请同时安排容量检查。');}

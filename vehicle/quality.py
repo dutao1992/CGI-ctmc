@@ -14,7 +14,11 @@ import time
 from .protocol import NUMERIC
 from .rules import distance
 
-VERSION = 2
+VERSION = 3
+# Frozen stationary manifests from the previous release remain valid facts.
+# Their profile thresholds are still usable by the v3 assessor; only the
+# decision version changes when the field-quarantine logic changes.
+COMPATIBLE_PROFILE_VERSIONS = (1, 2, VERSION)
 # Stored as a numeric sentinel to keep the existing SQLite schema/index.  API
 # callers see ``end: null`` and ``active: true`` instead of a year-9999 date.
 OPEN_END = 253402300799.0
@@ -58,22 +62,30 @@ AUTO_EXIT_POLICY = {
 BITS = {key: 1 << i for i, key in enumerate(NUMERIC)}
 ALL_FIELDS = sum(BITS.values())
 REASONS = {
-    'invalid_navigation': ('导航初始化 / 定位无效', 'unavailable'),
-    'heading_unavailable': ('定向未就绪', 'unavailable'),
-    'course_unavailable': ('静止或低速航迹角不可用', 'unavailable'),
-    'stationary_position': ('静止位置离群', 'anomaly'),
-    'position_uncertainty': ('水平定位不确定度超限', 'anomaly'),
-    'stationary_altitude': ('静止高程离群', 'anomaly'),
-    'altitude_uncertainty': ('高程不确定度超限', 'anomaly'),
-    'stationary_velocity': ('静止水平速度异常', 'anomaly'),
-    'stationary_vertical': ('静止垂向速度异常', 'anomaly'),
-    'stationary_gyro': ('静止角速度离群', 'anomaly'),
-    'stationary_accel': ('静止比力离群', 'anomaly'),
-    'stationary_attitude': ('静止姿态离群', 'anomaly'),
+    # These are retained as status evidence, not field-quarantine reasons.
+    # Initialization, heading readiness and low-speed course must remain
+    # visible in the measurement view even when they are not business-ready.
+    'invalid_navigation': ('导航初始化 / 定位无效（保留显示）', 'status'),
+    'heading_unavailable': ('定向未就绪（保留显示）', 'status'),
+    'course_unavailable': ('静止或低速航迹角（保留显示）', 'status'),
+    # v3 has one and only one quarantine rule: a confirmed stationary point
+    # whose position has drifted beyond the fitted stationary reference.
+    'stationary_position': ('静止定位偏差', 'anomaly'),
+    # Kept as stable reason names so older clients can still parse an audit
+    # record; v3 no longer emits these quarantine reasons.
+    'position_uncertainty': ('历史规则：水平定位不确定度超限', 'legacy'),
+    'stationary_altitude': ('历史规则：静止高程离群', 'legacy'),
+    'altitude_uncertainty': ('历史规则：高程不确定度超限', 'legacy'),
+    'stationary_velocity': ('历史规则：静止水平速度异常', 'legacy'),
+    'stationary_vertical': ('历史规则：静止垂向速度异常', 'legacy'),
+    'stationary_gyro': ('历史规则：静止角速度离群', 'legacy'),
+    'stationary_accel': ('历史规则：静止比力离群', 'legacy'),
+    'stationary_attitude': ('历史规则：静止姿态离群', 'legacy'),
 }
 REASON_BITS = {key: 1 << i for i, key in enumerate(REASONS)}
 ANOMALY_BITS = sum(REASON_BITS[k] for k, (_, kind) in REASONS.items() if kind == 'anomaly')
 UNAVAILABLE_BITS = sum(REASON_BITS[k] for k, (_, kind) in REASONS.items() if kind == 'unavailable')
+STATUS_BITS = sum(REASON_BITS[k] for k, (_, kind) in REASONS.items() if kind == 'status')
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS quality_contexts (
  id TEXT PRIMARY KEY, device_id TEXT NOT NULL, start REAL NOT NULL, end REAL NOT NULL,
@@ -250,44 +262,45 @@ def assess(p, context=None, explain=False):
         if explain:
             details.append(dict(code=code, label=REASONS[code][0], category=REASONS[code][1],
                                 fields=fields, values={k:p[k] for k in fields}, reference=reference, limit=limit))
-    if not p['valid_pos'] or p['nav_mode'] == 0:
-        reject('invalid_navigation', ['lat','lon','alt','speed','ve','vn','vu','course','course_std',
-                                      'lat_std','lon_std','alt_std','ve_std','vn_std','vu_std'])
-    if p['nav_mode'] == 0:
-        reject('invalid_navigation', ['pitch','roll','pitch_std','roll_std'])
-    if p['nav_mode'] != 2 or p['fix_mode'] not in (1,2,3,4,5):
-        reject('heading_unavailable', ['heading','heading_std'])
-    if context or p['speed'] < 1 or not p['valid_pos']:
-        reject('course_unavailable', ['course','course_std'])
-    if context:
+    def note(code, fields):
+        """Record a readiness status without masking any measurement field."""
+        nonlocal reasons
+        fields = [k for k in fields if p.get(k) is not None]
+        if not fields:
+            return
+        reasons |= REASON_BITS[code]
+        if explain:
+            details.append(dict(code=code, label=REASONS[code][0], category=REASONS[code][1],
+                                fields=fields, values={k:p[k] for k in fields}, reference=None, limit=None))
+
+    # Readiness is an explicit status, not a data-removal rule.  Keep every
+    # supplied value so initialization and undirected/low-speed samples remain
+    # available for diagnostics and later curve recomputation.
+    if not p.get('valid_pos') or p.get('nav_mode') == 0:
+        note('invalid_navigation', ['lat','lon','alt','speed','ve','vn','vu','course','course_std',
+                                     'lat_std','lon_std','alt_std','ve_std','vn_std','vu_std'])
+    if p.get('nav_mode') != 2 or p.get('fix_mode') not in (1,2,3,4,5):
+        note('heading_unavailable', ['heading','heading_std'])
+    if context or p.get('speed') is None or p['speed'] < 1 or not p.get('valid_pos'):
+        note('course_unavailable', ['course','course_std'])
+
+    if context and p.get('valid_pos') and p.get('nav_mode') != 0:
+        # The sole v3 quarantine rule.  A confirmed stationary interval may
+        # retain every inertial, speed and quality channel; only coordinates
+        # that drift away from the fitted anchor are removed from the running
+        # projection so they cannot form a false route.
         profile = context['profile']
-        if p['valid_pos'] and p['nav_mode'] != 0:
-            anchor = profile['anchor']
-            radius = distance(p, anchor)
-            if radius > profile['position_limit_m']:
-                reject('stationary_position', ['lat','lon'], dict(anchor, distance_m=radius), profile['position_limit_m'])
-            horizontal_std = max(p.get('lat_std') or 0, p.get('lon_std') or 0)
-            horizontal_std_limit = profile.get('position_std_limit_m')
-            if horizontal_std_limit is not None and horizontal_std > horizontal_std_limit:
-                reject('position_uncertainty', ['lat','lon','lat_std','lon_std'], 0, horizontal_std_limit)
-            if abs(p['alt']-profile['centers']['alt']) > profile['limits']['alt']:
-                reject('stationary_altitude', ['alt'], profile['centers']['alt'], profile['limits']['alt'])
-            altitude_std_limit = profile.get('altitude_std_limit_m')
-            if altitude_std_limit is not None and (p.get('alt_std') or 0) > altitude_std_limit:
-                reject('altitude_uncertainty', ['alt','alt_std'], 0, altitude_std_limit)
-            # Coupled horizontal velocity components share a validity decision.
-            if max(abs(p[k]) for k in ('speed','ve','vn')) > profile['horizontal_limit_ms']:
-                reject('stationary_velocity', ['speed','ve','vn'], 0, profile['horizontal_limit_ms'])
-            if abs(p['vu']) > profile['limits']['vu']:
-                reject('stationary_vertical', ['vu'], 0, profile['limits']['vu'])
-        for code, fields in [('stationary_gyro', ('gx','gy','gz')), ('stationary_accel', ('ax','ay','az')),
-                             ('stationary_attitude', ('pitch','roll'))]:
-            for key in fields:
-                if p[key] is None or mask & BITS[key]:
-                    continue
-                deviation = angle_delta(p[key], profile['centers'][key]) if key in ('pitch','roll') else p[key]-profile['centers'][key]
-                if abs(deviation) > profile['limits'][key]:
-                    reject(code, [key], profile['centers'][key], profile['limits'][key])
+        anchor = profile['anchor']
+        radius = distance(p, anchor)
+        horizontal_std = max(p.get('lat_std') or 0, p.get('lon_std') or 0)
+        horizontal_std_limit = profile.get('position_std_limit_m')
+        position_bad = radius > profile['position_limit_m']
+        if horizontal_std_limit is not None and horizontal_std > horizontal_std_limit:
+            position_bad = True
+        if position_bad:
+            reject('stationary_position', ['lat','lon'],
+                   dict(anchor, distance_m=radius, horizontal_std_m=horizontal_std),
+                   profile['position_limit_m'])
     return mask, reasons, details
 
 
@@ -389,7 +402,7 @@ def install_context(c, scope):
     bounded = scope['kind'] == 'confirmed_stationary' and scope.get('end') is not None
     profile_version = scope.get('profile', {}).get('version')
     training_end = scope.get('profile', {}).get('training_end', scope.get('end'))
-    if (not (bounded or active) or profile_version not in (1, VERSION) or
+    if (not (bounded or active) or profile_version not in COMPATIBLE_PROFILE_VERSIONS or
             not scope['start'] < context_end(scope) or training_end is None or training_end > time.time()):
         raise ValueError('静止范围或算法版本无效')
     existing = c.execute('SELECT * FROM quality_contexts WHERE id=?', (scope['id'],)).fetchone()

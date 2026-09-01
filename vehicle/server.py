@@ -200,7 +200,7 @@ def create_handler(store, raw_root, static_root, auth_url):
                                 reason = args.get('reason','anomaly')
                                 choices = dict(quality.REASON_BITS,anomaly=quality.ANOMALY_BITS,unavailable=quality.UNAVAILABLE_BITS,all=quality.ANOMALY_BITS|quality.UNAVAILABLE_BITS)
                                 if reason not in choices: raise ValueError('未知过滤原因')
-                                suffix += ' AND q.version=? AND (q.reasons & ?)!=0'
+                                suffix += ' AND q.version=? AND q.mask!=0 AND (q.reasons & ?)!=0'
                                 params.extend([quality.VERSION,choices[reason]])
                             count = c.execute('SELECT COUNT(*) FROM ('+quality.JOIN+suffix+')',params).fetchone()[0]
                             if count > 100_000:

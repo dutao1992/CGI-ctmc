@@ -71,7 +71,7 @@ async function appHarness(){
       return {ok:true,json:async()=>data};}
   };
   vm.createContext(context);
-  vm.runInContext(fs.readFileSync(require.resolve('../static/app.js'),'utf8')+'\nthis.appTest={renderMap,renderOverview,selectTime,locateEvent,buildChart,renderVibration,renderServiceState,query,chooseRange,setRange,setView,loadDevices,loadQuarantine,stationaryRange,renderFilterSummary,renderOfflineAnalysis,chooseOfflineFile,analyzeOfflineFile,state,setData(d){state.data=d;state.device={id:"SN1",rules:{}};},setOfflineData(d){state.offlineData=d;}};',context);
+  vm.runInContext(fs.readFileSync(require.resolve('../static/app.js'),'utf8')+'\nthis.appTest={renderMap,renderOverview,selectTime,playbackPoint,locateEvent,buildChart,renderVibration,renderServiceState,query,chooseRange,setRange,setView,loadDevices,loadQuarantine,stationaryRange,renderFilterSummary,renderOfflineAnalysis,chooseOfflineFile,analyzeOfflineFile,state,setData(d){state.data=d;state.device={id:"SN1",rules:{}};},setOfflineData(d){state.offlineData=d;}};',context);
   await new Promise(resolve=>setImmediate(resolve));
   const app=context.appTest;
   return {app,calls,node,shortcuts,interval:()=>interval(),respond(fn){respond=fn;},offlineRespond(fn){offlineRespond=fn;},offlineUpload:()=>offlineUpload,setNow(value){now=value;},setPoint(p){point=p;},
@@ -84,7 +84,7 @@ function queryFixture(params,total=3){
   const start=+params.get('start'),end=+params.get('end');
   const t=end-2,track=total?[{t,lat:31.2456,lon:121.616,speed:.1}]:[];
   const vibration=total?{available:true,start:t-1,end:t,samples:11,sample_hz:10,duration_s:1,frequency_resolution_hz:.1,usable_frequency_hz:[.2,4],time:[[t*1000-1000,.01,null],[t*1000,.02,.015]],spectrum:[[1,.01],[2,.03]],metrics:{rms_g:.015,peak_g:.02,peak_to_peak_g:.03,crest_factor:1.33,dominant_hz:2,dominant_amplitude_g:.03},range:{available:true,start,end,samples:total,buckets:1,series_fields:['timestamp_ms','rms_g','peak_g','mean_g','min_g','max_g','count'],series:[[start*1000,.011,.02,1,.98,1.02,total]],metrics:{rms_g:.011,peak_g:.02,peak_to_peak_g:.04,mean_g:1},capability:'10 Hz 仅用于 0–4 Hz 低频载体振动观察'},method:'测试处理链',source:'测试连续原始窗',capability:'10 Hz 仅用于 0–4 Hz 低频载体振动观察'}:{available:false,reason:'所选时段无采样',range:{available:false,reason:'所选时段无采样',capability:'10 Hz 仅用于 0–4 Hz 低频载体振动观察'},capability:'10 Hz 仅用于 0–4 Hz 低频载体振动观察'};
-  return {device_id:params.get('device'),start,end,total,track,events:{total:0,items:[]},segments:[],summary:{first_t:total?t:null,last_t:total?t:null,distance_km:0,moving_s:0,max_kmh:.36,fixed_pct:100,gap_count:0},series:{speed:total?[[t*1000,.1,.1,.1]]:[],gx:total?[[t*1000,.2,.2,.2]]:[]},vibration,gaps:[],aggregation:{buckets:total?1:0,bucket_s:(end-start)/700},quality:{version:1,total,anomaly_samples:0,unavailable_samples:0,pending_samples:0,contexts:[],excluded_fields:{},reasons:[]}};
+  return {device_id:params.get('device'),start,end,total,track,events:{total:0,items:[]},segments:[],summary:{first_t:total?t:null,last_t:total?t:null,distance_km:0,moving_s:0,max_kmh:.36,fixed_pct:100,gap_count:0},series:{speed:total?[[t*1000,.1,.1,.1]]:[],gx:total?[[t*1000,.2,.2,.2]]:[]},vibration,gaps:[],aggregation:{buckets:total?1:0,bucket_s:(end-start)/700},quality:{version:1,total,anomaly_samples:0,status_samples:0,unavailable_samples:0,pending_samples:0,contexts:[],excluded_fields:{},reasons:[]}};
 }
 function offlineFixture(){
   const start=1787731200,end=1787731265,track=[{t:start,lat:31.2456,lon:121.616,speed:2,break_before:true},{t:end,lat:31.2457,lon:121.6161,speed:3}];
@@ -120,6 +120,18 @@ test('actual application converts routes, endpoints, events, playback, chart and
   // Returning to real motion restores measured coordinates, without a sticky anchor.
   mapTest.setData(data);mapTest.renderMap();mapTest.selectTime(101);
   near(calls.moves.at(-1),CTMCMap.latLng(track[1]));assert.equal(node('stationaryMapNote').hidden,true);
+});
+
+test('long-window playback interpolates between retained route anchors and respects breaks',async()=>{
+  const {app,calls,node}=await appHarness();
+  const first={t:100,lat:31.2456,lon:121.616,speed:1},second={t:200,lat:31.2466,lon:121.618,speed:3},last={t:400,lat:31.2476,lon:121.619,speed:4,break_before:true};
+  app.setData({start:100,end:400,total:3,track:[first,second,last],events:{items:[]},summary:{first_t:100,last_t:400},series:{},gaps:[],aggregation:{bucket_s:600},quality:{contexts:[]}});
+  app.renderMap();app.selectTime(150);
+  near(calls.moves.at(-1),CTMCMap.latLng({lat:31.2461,lon:121.617,speed:2}));
+  assert.match(node('coordinateReadout').textContent,/回放插值/);
+  app.selectTime(250);
+  near(calls.moves.at(-1),CTMCMap.latLng(second));
+  assert.doesNotMatch(node('coordinateReadout').textContent,/回放插值/);
 });
 
 test('adjacent bounded and active stationary facts cover a selected range without a false moving label',async()=>{
