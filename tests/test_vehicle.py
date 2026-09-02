@@ -161,7 +161,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(out['total'],20)
     def test_gap_breaks_route_and_mileage(self):
         tow=parse(LIVE[0])['tow']
-        self.ingest(altered(tow=tow,speed=10),altered(tow=tow+1,speed=10),altered(tow=tow+20,speed=10))
+        self.ingest(altered(tow=tow,speed=10,ax=1.02),altered(tow=tow+1,speed=10,ax=1.02),altered(tow=tow+20,speed=10,ax=1.02))
         t=parse(LIVE[0])['t'];out=self.store.query('6094510',t-1,t+25)
         self.assertAlmostEqual(out['summary']['distance_km'],.01)
         self.assertEqual(out['summary']['gap_count'],1)
@@ -457,6 +457,39 @@ class QualityTests(unittest.TestCase):
     tearDown=StoreTests.tearDown
     ingest=StoreTests.ingest
 
+    def test_v5_motion_state_uses_only_tri_axis_peak_deviation(self):
+        point=parse(LIVE[0]);tow=point['tow'];self.t=point['t']
+        stationary=altered(tow=tow,ax=1.004,ay=0,az=0,speed=30,status='60')
+        boundary=altered(tow=tow+.1,ax=1.005,ay=0,az=0,speed=0,status='60')
+        moving=altered(tow=tow+.2,ax=1.006,ay=0,az=0,speed=0,status='60')
+        self.assertEqual(quality.motion_state(parse(stationary)),'stationary')
+        self.assertEqual(quality.motion_state(parse(boundary)),'stationary')
+        self.assertEqual(quality.motion_state(parse(moving)),'moving')
+        self.ingest(stationary,boundary,moving)
+        timestamps=[parse(frame)['t'] for frame in (stationary,boundary,moving)]
+        for timestamp,state in zip(timestamps,('stationary','stationary','moving')):
+            sample=self.store.point('6094510',timestamp)
+            self.assertEqual(sample['motion_state'],state)
+        # Navigation mode and reported speed do not override the IMU decision.
+        self.assertEqual(self.store.point('6094510',timestamps[2])['speed'],0)
+        result=self.store.query('6094510',self.t-.1,self.t+1)
+        self.assertEqual(result['motion_states'][-1][1],'moving')
+
+    def test_v5_keeps_static_and_running_positions_but_masks_a_severe_jump(self):
+        point=parse(LIVE[0]);tow=point['tow'];self.t=point['t']
+        static=altered(tow=tow,ax=1,ay=0,az=0,lat=point['lat'],lon=point['lon'])
+        running=altered(tow=tow+.1,ax=1.02,ay=0,az=0,speed=2,lat=point['lat']+.00001)
+        jump=altered(tow=tow+.2,ax=1.02,ay=0,az=0,speed=2,lat=point['lat']+.02)
+        self.ingest(static,running,jump)
+        self.assertIsNotNone(self.store.point('6094510',self.t)['lat'])
+        timestamps=[parse(frame)['t'] for frame in (static,running,jump)]
+        self.assertIsNotNone(self.store.point('6094510',timestamps[1])['lat'])
+        self.assertIsNone(self.store.point('6094510',timestamps[2])['lat'])
+        original=self.store.point('6094510',timestamps[2],raw=True)
+        self.assertAlmostEqual(original['lat'],point['lat']+.02,places=7)
+        records=self.store.quality_records('6094510',self.t-.1,self.t+1,'navigation_position_drift')
+        self.assertEqual(records['total'],1)
+
     def reference(self, extra=()):
         p=parse(LIVE[0]);tow=p['tow'];self.t=p['t']
         self.ingest(*[altered(tow=tow+i*.1,speed=.05,ve=.01,vn=.01,vu=0) for i in range(120)],*extra)
@@ -484,7 +517,7 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(result['quality']['anomaly_samples'],1)
         records=self.store.quality_records('6094510',self.t-1,t+1)
         self.assertEqual(records['total'],1);self.assertEqual(records['items'][0]['t'],t)
-        self.assertIn('stationary_position',{d['code'] for d in records['items'][0]['details']})
+        self.assertIn('navigation_position_drift',{d['code'] for d in records['items'][0]['details']})
 
     def test_impossible_navigation_velocity_is_removed_from_effective_curves_only(self):
         p=parse(LIVE[0]);tow=p['tow'];self.t=p['t']
@@ -501,7 +534,7 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(clean['gx'],.04);self.assertEqual(clean['ax'],.997)
         self.assertEqual(original['speed'],111.62);self.assertEqual(original['vu'],88.55)
         result=self.store.query('6094510',self.t-1,self.t+2)
-        self.assertEqual(result['summary']['max_kmh'],72)
+        self.assertIsNone(result['summary']['max_kmh'])
         self.assertLessEqual(max(row[3] for row in result['series']['speed'] if row[3] is not None),20)
         self.assertEqual(len(result['track']),1)
         records=self.store.quality_records('6094510',self.t,self.t+2,'anomaly')
@@ -509,52 +542,19 @@ class QualityTests(unittest.TestCase):
         self.assertIn('navigation_velocity_outlier',
                       {detail['code'] for detail in records['items'][0]['details']})
 
-    def test_auto_entry_rejects_quiet_translation_then_confirms_static_drift(self):
+    def test_v5_does_not_open_speed_or_position_based_stationary_contexts(self):
         p=parse(LIVE[0]);tow=p['tow'];self.t=p['t']
-        # Quiet constant-velocity motion has calm IMU data, but its coherent
-        # displacement must prevent an automatic stationary declaration.
-        moving=[altered(tow=tow+i,status='91',speed=.3,ve=0,vn=.3,
-                        lat=p['lat']+i*.0000027,
-                        lat_std=.5,lon_std=.5,alt_std=1) for i in range(121)]
-        self.ingest(*moving)
+        frames=[altered(tow=tow+i,status='91',speed=.3,ve=0,vn=.3,
+                        lat=p['lat']+i*.0000027,ax=1,ay=0,az=0) for i in range(121)]
+        self.ingest(*frames)
         with self.store.connect() as c:
             self.assertFalse(quality.contexts(c,'6094510'))
-
-        anchor_lat=p['lat']+120*.0000027
-        static=[altered(tow=tow+i,status='91',speed=1.2 if i%10==0 else .2,
-                        ve=0,vn=.2,lat=anchor_lat+(i%5-2)*.000001,
-                        lon=p['lon']+(i%7-3)*.000001,
-                        lat_std=1.5,lon_std=1.5,alt_std=1) for i in range(121,242)]
-        self.ingest(*static)
-        with self.store.connect() as c:
-            contexts=quality.contexts(c,'6094510')
-            audit=c.execute("SELECT * FROM audit WHERE action='quality.stationary_context.auto_open'").fetchone()
-        self.assertEqual(len(contexts),1);context=contexts[0]
-        self.assertTrue(context['active']);self.assertEqual(audit['actor'],'system/automatic')
-        self.assertEqual(context['origin']['action'],'quality.stationary_context.auto_open')
-        evidence=context['profile']['automatic_entry']
-        self.assertLessEqual(evidence['median_speed_ms'],.5)
-        self.assertLessEqual(evidence['displacement_m'],15)
-        self.assertLessEqual(evidence['path_efficiency'],.35)
-        self.assertLessEqual(context['start'],self.t+121)
-
-        # Once stationary is confirmed, a later GNSS wander cannot form a
-        # route or a highest-effective-speed value, while its raw value stays.
-        drift=altered(tow=tow+242,status='91',speed=2,ve=0,vn=.2,
-                      lat=anchor_lat+.001,lat_std=8,lon_std=8,alt_std=1)
-        self.ingest(drift)
-        clean=self.store.point('6094510',self.t+242)
-        self.assertIsNone(clean['lat']);self.assertIsNone(clean['lon'])
-        self.assertEqual(clean['speed'],2)
-        result=self.store.query('6094510',context['start'],self.t+243)
-        self.assertEqual(result['summary']['moving_s'],0)
-        self.assertIsNone(result['summary']['max_kmh'])
-        self.assertFalse(any(item['t']==self.t+242 for item in result['track']))
+        self.assertTrue(all(self.store.point('6094510',self.t+i)['motion_state']=='stationary' for i in range(121)))
 
     def test_bounded_fact_does_not_filter_future_motion_or_another_device(self):
         self.reference();p=parse(LIVE[0]);tow=p['tow']
-        self.ingest(altered(tow=tow+16,status='42',speed=10,ve=10),altered(tow=tow+17,status='42',speed=10,ve=10),
-                    altered(tow=tow+1,sn='OTHER',status='42',speed=10,ve=10))
+        self.ingest(altered(tow=tow+16,status='42',speed=10,ve=10,ax=1.02),altered(tow=tow+17,status='42',speed=10,ve=10,ax=1.02),
+                    altered(tow=tow+1,sn='OTHER',status='42',speed=10,ve=10,ax=1.02))
         future=self.store.query('6094510',self.t+15.5,self.t+18)
         self.assertEqual(future['summary']['max_kmh'],36)
         self.assertAlmostEqual(future['summary']['distance_km'],.01)
@@ -574,7 +574,7 @@ class QualityTests(unittest.TestCase):
         self.ingest(altered(tow=tow+20,status='42',speed=8,ve=8,lat=p['lat']+.01,
                             lat_std=1,lon_std=1,alt_std=1))
         clean=self.store.point('6094510',self.t+20)
-        self.assertEqual(clean['speed'],8);self.assertIsNone(clean['lat'])
+        self.assertEqual(clean['speed'],8);self.assertIsNotNone(clean['lat'])
         result=self.store.query('6094510',self.t+19,self.t+21)
         self.assertEqual(result['summary']['distance_km'],0)
         self.assertEqual(result['quality']['contexts'][0]['end'],None)
@@ -588,7 +588,7 @@ class QualityTests(unittest.TestCase):
         self.ingest(altered(tow=tow+21,status='42',speed=8,ve=8,lat_std=1,lon_std=1,alt_std=1))
         self.assertEqual(self.store.point('6094510',self.t+21)['speed'],8)
 
-    def test_active_stationary_quality_caps_move_uncertain_values_to_evidence(self):
+    def test_v5_static_position_is_retained_even_with_large_reported_uncertainty(self):
         p=parse(LIVE[0]);tow=p['tow'];self.t=p['t']
         frames=[altered(tow=tow+i*.1,speed=.05,ve=.01,vn=.01,vu=0,lat_std=1,lon_std=1,alt_std=1) for i in range(120)]
         self.ingest(*frames)
@@ -600,111 +600,41 @@ class QualityTests(unittest.TestCase):
         self.ing=Ingestor(self.store,self.raw)
         self.ingest(altered(tow=tow+20,lat_std=6,lon_std=4,alt_std=9))
         clean=self.store.point('6094510',self.t+20)
-        self.assertIsNone(clean['lat']);self.assertIsNone(clean['lon'])
+        self.assertIsNotNone(clean['lat']);self.assertIsNotNone(clean['lon'])
         original=parse(altered(tow=tow+20,lat_std=6,lon_std=4,alt_std=9))
         for key in ('lat_std','lon_std','alt','alt_std'):
             self.assertEqual(clean[key],original[key],key)
         evidence=self.store.quality_records('6094510',self.t+19,self.t+21,'anomaly')
-        codes={detail['code'] for detail in evidence['items'][0]['details']}
-        self.assertIn('stationary_position',codes);self.assertNotIn('altitude_uncertainty',codes)
+        self.assertEqual(evidence['total'],0)
 
-    def test_active_stationary_auto_exit_requires_sustained_high_quality_motion(self):
+    def test_v5_motion_does_not_revoke_or_create_stationary_lifecycle_facts(self):
         p=parse(LIVE[0]);tow=p['tow'];self.t=p['t']
-        self.ingest(*[altered(tow=tow+i*.1,speed=.05,ve=.01,vn=.01,vu=0,lat_std=1,lon_std=1,alt_std=1) for i in range(120)])
+        self.ingest(*[altered(tow=tow+i*.1,speed=.05,ax=1,ay=0,az=0) for i in range(120)])
         with self.store.connect() as c:
-            fitted=quality.build_context(c,p['device_id'],self.t,self.t+11.9,'unit-test automatic exit')
+            fitted=quality.build_context(c,p['device_id'],self.t,self.t+11.9,'unit-test explicit audit')
             scope=quality.make_active(fitted,self.t,self.t+11.9)
             quality.install_context(c,scope)
         quality.backfill(self.store);self.ing=Ingestor(self.store,self.raw)
-        # One excellent-looking jump is not enough to revoke a confirmed fact.
-        self.ingest(altered(tow=tow+20,status='42',speed=3,lat=p['lat']+.0004,
-                            lat_std=.5,lon_std=.5,alt_std=1))
-        self.assertEqual(self.store.point('6094510',self.t+20)['speed'],3)
-        with self.store.connect() as c:self.assertTrue(quality.contexts(c,'6094510')[-1]['active'])
-        # Satellite-only data stays quarantined even when raw speed and
-        # coordinates drift in a motion-like direction.
-        self.ingest(*[altered(tow=tow+21+i*.5,status='61',speed=4,lat=p['lat']+.0004+i*.00001,
-                              lat_std=.5,lon_std=.5,alt_std=1) for i in range(13)])
-        with self.store.connect() as c:self.assertTrue(quality.contexts(c,'6094510')[-1]['active'])
-        # A late historical frame resets a nearly-complete candidate instead of
-        # moving the lifecycle boundary behind newer assessments.
-        self.ingest(*[altered(tow=tow+30+i*.5,status='42',speed=3,lat=p['lat']+.0004+i*.00001,
-                              lat_std=.5,lon_std=.5,alt_std=1) for i in range(10)])
-        self.ingest(altered(tow=tow+29,status='42',speed=3,lat=p['lat']+.0004,
-                            lat_std=.5,lon_std=.5,alt_std=1),
-                    altered(tow=tow+35,status='42',speed=3,lat=p['lat']+.0005,
-                            lat_std=.5,lon_std=.5,alt_std=1))
-        with self.store.connect() as c:self.assertTrue(quality.contexts(c,'6094510')[-1]['active'])
-        # A long but indecisive RTK path is not enough: net displacement and
-        # path efficiency must both confirm translation rather than wandering.
-        self.ingest(*[altered(tow=tow+40+i*.5,status='92',speed=.5,
-                              lat=p['lat']+.00035+(i%10)*.000002,
-                              lat_std=.5,lon_std=.5,alt_std=1) for i in range(40)])
-        with self.store.connect() as c:self.assertTrue(quality.contexts(c,'6094510')[-1]['active'])
-        self.ingest(altered(tow=tow+60,status='92',speed=.05,lat=p['lat']+.00035,
-                            lat_std=.5,lon_std=.5,alt_std=1))
-        # A 0.5 m/s commissioning trolley with combination navigation and an
-        # undirected RTK float still closes after a coherent eight-metre path.
-        self.ingest(*[altered(tow=tow+61+i*.5,status='92',speed=.5,
-                              lat=p['lat']+.00035+i*.0000025,
-                              lat_std=.5,lon_std=.5,alt_std=1) for i in range(41)])
-        last_t=self.t+81
-        self.assertEqual(self.store.point('6094510',last_t)['speed'],.5)
-        self.assertEqual(self.store.point('6094510',self.t+61)['speed'],.5)
+        self.ingest(*[altered(tow=tow+20+i*.1,status='42',speed=3,ax=1.02,ve=3,vn=0,
+                              lat=p['lat']+.00001*i) for i in range(30)])
         with self.store.connect() as c:
-            context=quality.contexts(c,'6094510')[-1]
-            audit=c.execute("SELECT * FROM audit WHERE action='quality.stationary_context.auto_close'").fetchone()
-            counts=(c.execute('SELECT COUNT(*) FROM points').fetchone()[0],
-                    c.execute('SELECT COUNT(*) FROM point_quality').fetchone()[0],
-                    c.execute('SELECT SUM(point_count) FROM point_rollups WHERE bucket_s=60').fetchone()[0])
-        self.assertFalse(context['active']);self.assertLess(context['end'],last_t)
-        self.assertEqual(context['closure']['actor'],'system/automatic')
-        self.assertGreaterEqual(context['closure']['duration_s'],15)
-        self.assertGreaterEqual(context['closure']['displacement_m'],8)
-        self.assertGreaterEqual(context['closure']['path_efficiency'],.5)
-        self.assertEqual(context['closure']['fix_mode'],9)
-        self.assertEqual(audit['target'],scope['id'])
-        self.assertEqual(counts,(counts[0],counts[0],counts[0]))
+            contexts=quality.contexts(c,'6094510')
+        self.assertEqual(len(contexts),1);self.assertTrue(contexts[0]['active'])
+        moving_times=[parse(altered(tow=tow+20+i*.1,status='42',speed=3,ax=1.02,ve=3,vn=0,
+                                    lat=p['lat']+.00001*i))['t'] for i in range(30)]
+        self.assertTrue(all(self.store.point('6094510',timestamp)['motion_state']=='moving' for timestamp in moving_times))
+        self.assertIsNotNone(self.store.point('6094510',moving_times[0])['lat'])
 
-    def test_satellite_navigation_vehicle_motion_auto_exit_is_strict_and_retrospective(self):
+    def test_v5_classifies_satellite_only_motion_without_navigation_fields(self):
         p=parse(LIVE[0]);tow=p['tow'];self.t=p['t']
-        self.ingest(*[altered(tow=tow+i*.1,speed=.05,ve=.01,vn=.01,vu=0,
-                              lat_std=1,lon_std=1,alt_std=1) for i in range(120)])
-        with self.store.connect() as c:
-            fitted=quality.build_context(c,p['device_id'],self.t,self.t+11.9,'unit-test satellite vehicle exit')
-            scope=quality.make_active(fitted,self.t,self.t+11.9)
-            quality.install_context(c,scope)
-        quality.backfill(self.store);self.ing=Ingestor(self.store,self.raw)
-        # Coherent 0.5 m/s satellite-navigation motion remains below the
-        # vehicle route and cannot weaken the combination-navigation trolley route.
-        self.ingest(*[altered(tow=tow+20+i*.5,status='91',speed=.5,ve=0,vn=.5,
-                              lat=p['lat']+.0004+i*.00000225,
-                              lat_std=.5,lon_std=.5,alt_std=1) for i in range(31)])
-        with self.store.connect() as c:self.assertTrue(quality.contexts(c,'6094510')[-1]['active'])
-        # At 3 m/s, position displacement, integrated speed and velocity vector
-        # agree for ten seconds. The full evidence window becomes ordinary data.
-        candidate_start=self.t+50
-        self.ingest(*[altered(tow=tow+50+i*.1,status='91',speed=3,ve=0,vn=3,
-                              lat=p['lat']+.0008+i*.0000027,
-                              lat_std=.5,lon_std=.5,alt_std=1) for i in range(121)])
-        with self.store.connect() as c:
-            context=quality.contexts(c,'6094510')[-1]
-            audit=c.execute("SELECT * FROM audit WHERE action='quality.stationary_context.auto_close'").fetchone()
-            detail=json.loads(audit['detail'])
-            pending=c.execute('''SELECT COUNT(*) FROM points p LEFT JOIN point_quality q
-                    ON q.device_id=p.device_id AND q.t=p.t AND q.protocol=p.protocol
-                    WHERE p.device_id=? AND p.t>=? AND (q.version IS NULL OR q.version!=?)''',
-                    ('6094510',candidate_start,quality.VERSION)).fetchone()[0]
-        self.assertFalse(context['active'])
-        self.assertAlmostEqual(context['end'],candidate_start-.001,places=3)
-        self.assertEqual(self.store.point('6094510',candidate_start)['speed'],3)
-        self.assertEqual(detail['route'],'satellite_vehicle_motion')
-        self.assertGreaterEqual(detail['duration_s'],10)
-        self.assertGreaterEqual(detail['displacement_m'],25)
-        self.assertGreaterEqual(detail['path_efficiency'],.65)
-        self.assertGreaterEqual(detail['distance_ratio'],.65)
-        self.assertLessEqual(detail['distance_ratio'],1.35)
-        self.assertEqual(pending,0)
+        self.ingest(*[altered(tow=tow+i*.1,status='60',speed=0,ax=1.02,ay=0,az=0,
+                              lat=p['lat']+.000001*i) for i in range(20)])
+        moving_times=[parse(altered(tow=tow+i*.1,status='60',speed=0,ax=1.02,ay=0,az=0,
+                                    lat=p['lat']+.000001*i))['t'] for i in range(20)]
+        self.assertTrue(all(self.store.point('6094510',timestamp)['motion_state']=='moving' for timestamp in moving_times))
+        result=self.store.query('6094510',self.t-.1,self.t+2.1)
+        self.assertGreater(result['summary']['moving_s'],1)
+        self.assertGreaterEqual(len(result['track']),1)
 
     def test_missing_assessment_fails_closed_and_backfill_is_idempotent(self):
         self.ingest(LIVE[0]);t=parse(LIVE[0])['t']
@@ -753,7 +683,7 @@ class QualityTests(unittest.TestCase):
         summary=self.store.quality_summary('6094510',self.t-1,self.t+16)
         self.assertEqual(summary['anomaly_samples'],1)
         self.assertEqual(summary['status_samples'],121)
-        self.assertEqual(next(r['count'] for r in summary['reasons'] if r['code']=='stationary_position'),1)
+        self.assertEqual(next(r['count'] for r in summary['reasons'] if r['code']=='navigation_position_drift'),1)
         first=self.store.quality_records('6094510',self.t-1,self.t+16,'all',0,50)
         second=self.store.quality_records('6094510',self.t-1,self.t+16,'all',50,50)
         self.assertEqual(first['total'],1);self.assertFalse(first['has_more'])

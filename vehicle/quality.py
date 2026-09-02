@@ -1,7 +1,9 @@
 """Versioned, reversible measurement quarantine. Never mutates original points.
 
-Stationarity is supplied ground truth for a bounded device/time interval, not
-inferred from quiet IMU data (constant-velocity motion can also have quiet IMU).
+v5 uses one deterministic tri-axis resultant threshold for motion state.  The
+only navigation quarantine is a conservative severe coordinate-jump check;
+initialization, heading readiness, low-speed course and static positions stay
+visible as evidence.
 """
 import argparse
 import collections
@@ -15,71 +17,29 @@ import time
 from .protocol import NUMERIC
 from .rules import distance
 
-VERSION = 4
-# Frozen stationary manifests from the previous release remain valid facts.
-# Their profile thresholds are still usable by the v4 assessor; only the
-# decision version changes when the field-quarantine logic changes.
-COMPATIBLE_PROFILE_VERSIONS = (1, 2, 3, VERSION)
+VERSION = 5
+# v5 deliberately has one motion rule.  A sample is stationary when the
+# resultant specific-force magnitude is within 0.005 g of the 1 g gravity
+# baseline; anything above the line is motion.  Navigation mode, heading
+# readiness and reported speed do not participate in this decision.
+MOTION_IMPACT_THRESHOLD_G = 0.005
+MOTION_STRATEGY = 'tri_axis_peak_deviation'
+# Frozen manifests from earlier releases are retained for audit only.  They
+# must never become the active filter after the v5 migration.
+COMPATIBLE_PROFILE_VERSIONS = (1, 2, 3, 4, VERSION)
 MAX_VALID_VEHICLE_SPEED_KMH = 130.0
 MAX_VALID_VEHICLE_SPEED_MS = MAX_VALID_VEHICLE_SPEED_KMH / 3.6
 BACKFILL_BATCH_SIZE = 20_000
 AUTO_ENTRY_POLICY = {
-    # Evaluate one representative sample per second over two minutes.  Quiet
-    # IMU alone is insufficient because a vehicle can travel at constant
-    # speed; low robust speed and a non-translating position cloud must agree.
-    'sample_interval_s': 1.0,
-    'min_duration_s': 120.0,
-    'min_samples': 100,
-    'max_gap_s': 2.0,
-    'min_valid_position_samples': 80,
-    'max_median_speed_ms': 0.5,
-    'max_p95_gyro_dps': 0.15,
-    'max_p95_accel_deviation_g': 0.02,
-    'max_median_position_std_m': 5.0,
-    'max_displacement_m': 15.0,
-    'max_p90_radius_m': 20.0,
-    'max_path_efficiency': 0.35,
+    'strategy': MOTION_STRATEGY,
+    'threshold_g': MOTION_IMPACT_THRESHOLD_G,
+    'stationary': f'peak_deviation <= {MOTION_IMPACT_THRESHOLD_G:.3f} g',
+    'moving': f'peak_deviation > {MOTION_IMPACT_THRESHOLD_G:.3f} g',
 }
 # Stored as a numeric sentinel to keep the existing SQLite schema/index.  API
 # callers see ``end: null`` and ``active: true`` instead of a year-9999 date.
 OPEN_END = 253402300799.0
-AUTO_EXIT_POLICY = {
-    # Automatic closure is deliberately stricter than ordinary motion/event
-    # detection.  It changes a user-confirmed fact, so speed alone or one GNSS
-    # jump must never be enough.
-    # A commissioning trolley may only reach 0.5 m/s.  Low speed is accepted
-    # only together with a long RTK displacement and a coherent path.
-    'min_speed_ms': 0.15,
-    'min_duration_s': 15.0,
-    'min_samples': 10,
-    'max_gap_s': 1.5,
-    'max_position_std_m': 1.0,
-    'min_anchor_distance_m': 30.0,
-    'min_displacement_m': 8.0,
-    'min_path_efficiency': 0.5,
-    'nav_modes': [2],
-    # Heading readiness is not required to prove translation.  RTK fixed/float
-    # positions are accepted both with and without dual-antenna direction.
-    'fix_modes': [4, 5, 8, 9],
-    # A separate, substantially stronger route recovers ordinary vehicle runs
-    # when the receiver remains in satellite-navigation mode. It deliberately
-    # does not weaken the 0.5 m/s commissioning-trolley route above.
-    'vehicle_motion': {
-        'min_speed_ms': 1.0,
-        'min_duration_s': 10.0,
-        'min_samples': 20,
-        'max_gap_s': 0.3,
-        'max_position_std_m': 5.0,
-        'min_anchor_distance_m': 30.0,
-        'min_displacement_m': 25.0,
-        'min_path_efficiency': 0.65,
-        'min_distance_ratio': 0.65,
-        'max_distance_ratio': 1.35,
-        'max_velocity_error_ms': 0.75,
-        'nav_modes': [1, 2],
-        'fix_modes': [4, 5, 8, 9],
-    },
-}
+AUTO_EXIT_POLICY = dict(AUTO_ENTRY_POLICY)
 BITS = {key: 1 << i for i, key in enumerate(NUMERIC)}
 ALL_FIELDS = sum(BITS.values())
 REASONS = {
@@ -89,13 +49,13 @@ REASONS = {
     'invalid_navigation': ('导航初始化 / 定位无效（保留显示）', 'status'),
     'heading_unavailable': ('定向未就绪（保留显示）', 'status'),
     'course_unavailable': ('静止或低速航迹角（保留显示）', 'status'),
-    # Stationary position drift remains field-level evidence.  v4 also adds a
-    # domain hard stop for a navigation solution faster than the confirmed
-    # vehicle capability; raw measurements remain untouched.
-    'stationary_position': ('静止定位偏差', 'anomaly'),
+    # v5 retains stable reason names for the two field-level navigation
+    # quarantines; raw measurements remain untouched.
+    'navigation_position_drift': ('显著位置漂移', 'anomaly'),
     'navigation_velocity_outlier': ('导航速度解算超过车辆物理上限', 'anomaly'),
     # Kept as stable reason names so older clients can still parse an audit
-    # record; v4 no longer emits these quarantine reasons.
+    # record; v5 no longer emits these legacy stationary-fit reasons.
+    'stationary_position': ('历史规则：静止定位偏差', 'legacy'),
     'position_uncertainty': ('历史规则：水平定位不确定度超限', 'legacy'),
     'stationary_altitude': ('历史规则：静止高程离群', 'legacy'),
     'altitude_uncertainty': ('历史规则：高程不确定度超限', 'legacy'),
@@ -117,14 +77,22 @@ CREATE INDEX IF NOT EXISTS quality_context_range ON quality_contexts(device_id,s
 CREATE TABLE IF NOT EXISTS point_quality (
  device_id TEXT NOT NULL, t REAL NOT NULL, protocol TEXT NOT NULL,
  version INTEGER NOT NULL, context_id TEXT, mask INTEGER NOT NULL, reasons INTEGER NOT NULL,
+ motion_state TEXT NOT NULL DEFAULT 'unknown',
  PRIMARY KEY(device_id,t,protocol)) WITHOUT ROWID;
 '''
 JOIN = '''SELECT p.*,q.version AS q_version,q.context_id AS q_context,
- q.mask AS q_mask,q.reasons AS q_reasons FROM points p LEFT JOIN point_quality q
+ q.mask AS q_mask,q.reasons AS q_reasons,q.motion_state AS q_motion_state FROM points p LEFT JOIN point_quality q
  ON q.device_id=p.device_id AND q.t=p.t AND q.protocol=p.protocol'''
 
 
-def contexts(c, sn=None):
+def ensure_schema(c):
+    """Apply additive quality migrations to databases created by v1-v4."""
+    columns = {row['name'] for row in c.execute('PRAGMA table_info(point_quality)')}
+    if columns and 'motion_state' not in columns:
+        c.execute("ALTER TABLE point_quality ADD COLUMN motion_state TEXT NOT NULL DEFAULT 'unknown'")
+
+
+def contexts(c, sn=None, include_legacy=False):
     rows = c.execute('SELECT * FROM quality_contexts' + (' WHERE device_id=?' if sn else '') + ' ORDER BY start', (sn,) if sn else ())
     closures = {}
     for row in c.execute("SELECT target,actor,action,detail FROM audit WHERE action IN ('quality.stationary_context.close','quality.stationary_context.auto_close') ORDER BY id"):
@@ -146,6 +114,14 @@ def contexts(c, sn=None):
     result = []
     for row in rows:
         item = dict(row, profile=json.loads(row['profile']))
+        # v1-v4 stationary facts remain queryable by an explicit audit, but
+        # cannot affect the v5 operational projection.  This prevents the old
+        # open context from turning all later running coordinates into static
+        # residuals after the threshold migration.
+        current = (item['profile'].get('strategy') == MOTION_STRATEGY and
+                   item['profile'].get('version') == VERSION)
+        if not include_legacy and not current:
+            continue
         item['active'] = item['kind'] == 'confirmed_stationary_active' and item['end'] == OPEN_END
         if item['active']:
             item['end'] = None
@@ -163,25 +139,15 @@ def context_end(scope):
 
 
 def context_for(p, scopes):
-    return next((s for s in scopes if s['device_id'] == p['device_id'] and s['start'] <= p['t'] <= context_end(s)), None)
+    return next((s for s in scopes
+                 if s.get('profile', {}).get('strategy') == MOTION_STRATEGY and
+                 s.get('profile', {}).get('version') == VERSION and
+                 s['device_id'] == p['device_id'] and s['start'] <= p['t'] <= context_end(s)), None)
 
 
 def automatic_exit_policy(context):
-    """Return the effective conservative policy for an active context."""
-    policy = dict(AUTO_EXIT_POLICY)
-    policy['vehicle_motion'] = dict(AUTO_EXIT_POLICY['vehicle_motion'])
-    overrides = context.get('profile', {}).get('auto_exit', {})
-    policy.update({key:value for key,value in overrides.items() if key != 'vehicle_motion'})
-    policy['vehicle_motion'].update(overrides.get('vehicle_motion', {}))
-    policy['min_anchor_distance_m'] = max(
-        float(policy['min_anchor_distance_m']),
-        2 * float(context['profile']['position_limit_m']),
-    )
-    policy['vehicle_motion']['min_anchor_distance_m'] = max(
-        float(policy['vehicle_motion']['min_anchor_distance_m']),
-        2 * float(context['profile']['position_limit_m']),
-    )
-    return policy
+    """Return the v5 threshold policy for API compatibility."""
+    return dict(AUTO_EXIT_POLICY)
 
 
 def automatic_entry_policy():
@@ -198,8 +164,57 @@ def percentile(values, fraction):
     return values[lower] * (1 - weight) + values[min(lower + 1, len(values) - 1)] * weight
 
 
+def tri_axis_resultant(p):
+    """Return the gravity-included resultant of the three accelerometers."""
+    values = [p.get(key) for key in ('ax', 'ay', 'az')]
+    if not all(isinstance(value, (int, float)) and math.isfinite(value) for value in values):
+        return None
+    return math.sqrt(sum(value * value for value in values))
+
+
+def tri_axis_peak_deviation(p):
+    """Return the absolute resultant deviation from the 1 g gravity baseline."""
+    resultant = tri_axis_resultant(p)
+    return abs(resultant - 1.0) if resultant is not None else None
+
+
+def motion_state(p):
+    """Classify one sample using only the tri-axis peak-deviation threshold."""
+    deviation = tri_axis_peak_deviation(p)
+    if deviation is None:
+        return 'unknown'
+    return 'moving' if deviation > MOTION_IMPACT_THRESHOLD_G else 'stationary'
+
+
+def navigation_position_drift(previous, current):
+    """Return conservative evidence for a single severe coordinate jump.
+
+    The filter is intentionally independent of the motion state: ordinary
+    running coordinates stay drawable, while a jump that cannot be covered by
+    the reported speed plus a generous 15 m/s allowance is isolated.
+    """
+    if not previous or not current:
+        return None
+    required = ('lat', 'lon')
+    if any(not isinstance(point.get(key), (int, float)) or not math.isfinite(point[key])
+           for point in (previous, current) for key in required):
+        return None
+    delta = current.get('t') - previous.get('t')
+    if not isinstance(delta, (int, float)) or not 0 < delta <= 3:
+        return None
+    jump = distance(current, previous)
+    speed = max(previous.get('speed') or 0, current.get('speed') or 0)
+    tolerance = max(20.0, 5 * (current.get('lat_std') or 0), 5 * (current.get('lon_std') or 0))
+    limit = (speed + 15.0) * delta + tolerance
+    if jump <= limit:
+        return None
+    return dict(distance_m=jump, delta_s=delta, limit_m=limit,
+                previous_speed_ms=previous.get('speed'), current_speed_ms=current.get('speed'),
+                tolerance_m=tolerance)
+
+
 class AutomaticStationaryEntryDetector:
-    """Enter a stationary lifecycle only after independent evidence agrees."""
+    """Deprecated v4 lifecycle hook; v5 never opens inferred contexts."""
     def __init__(self):
         self.windows = {}
 
@@ -207,6 +222,11 @@ class AutomaticStationaryEntryDetector:
         self.windows.pop(device_id, None)
 
     def observe(self, p, context=None):
+        # Kept as a no-op compatibility shim for old audit callers.  All live
+        # and historical decisions use motion_state() directly.
+        return None
+        # Legacy implementation retained below only for forensic source
+        # comparison; it is unreachable in v5.
         device_id = p['device_id']
         if context or p['t'] > time.time():
             self.forget(device_id)
@@ -279,7 +299,7 @@ class AutomaticStationaryEntryDetector:
 
 
 class ActiveStationaryExitDetector:
-    """Confirm unmistakable sustained motion without trusting a lone field."""
+    """Deprecated v4 lifecycle hook; v5 has no inferred exit lifecycle."""
     def __init__(self):
         self.candidates = {}
 
@@ -289,6 +309,9 @@ class ActiveStationaryExitDetector:
                 self.candidates.pop(key, None)
 
     def observe(self, p, context):
+        return None
+        # Legacy implementation retained below only for forensic source
+        # comparison; it is unreachable in v5.
         if not context or context.get('kind') != 'confirmed_stationary_active' or not context.get('active'):
             return None
         policy = automatic_exit_policy(context)
@@ -378,7 +401,7 @@ def angle_delta(value, reference):
     return (value-reference+180) % 360-180
 
 
-def assess(p, context=None, explain=False):
+def assess(p, context=None, explain=False, previous=None):
     mask = reasons = 0
     details = []
     def reject(code, fields, reference=None, limit=None):
@@ -430,31 +453,22 @@ def assess(p, context=None, explain=False):
                dict(speed_ms=p.get('speed'),horizontal_speed_ms=horizontal_speed,vertical_speed_ms=p.get('vu')),
                MAX_VALID_VEHICLE_SPEED_MS)
 
-    if context and p.get('valid_pos') and p.get('nav_mode') != 0:
-        # A confirmed stationary interval may
-        # retain every inertial, speed and quality channel; only coordinates
-        # that drift away from the fitted anchor are removed from the running
-        # projection so they cannot form a false route.
-        profile = context['profile']
-        anchor = profile['anchor']
-        radius = distance(p, anchor)
-        horizontal_std = max(p.get('lat_std') or 0, p.get('lon_std') or 0)
-        horizontal_std_limit = profile.get('position_std_limit_m')
-        position_bad = radius > profile['position_limit_m']
-        if horizontal_std_limit is not None and horizontal_std > horizontal_std_limit:
-            position_bad = True
-        if position_bad:
-            reject('stationary_position', ['lat','lon'],
-                   dict(anchor, distance_m=radius, horizontal_std_m=horizontal_std),
-                   profile['position_limit_m'])
+    # Do not replace or hide coordinates merely because a sample is static,
+    # initialized, undirected, or low speed.  Only an impossible single-step
+    # jump is quarantined; this keeps normal running and accurate static GNSS
+    # positions available to the map and every parameter curve.
+    drift = navigation_position_drift(previous, p)
+    if drift:
+        reject('navigation_position_drift', ['lat', 'lon'], drift, drift['limit_m'])
     return mask, reasons, details
 
 
-def write_assessment(c, p, scopes):
+def write_assessment(c, p, scopes, previous=None):
     context = context_for(p, scopes)
-    mask, reasons, _ = assess(p, context)
-    c.execute('INSERT OR REPLACE INTO point_quality VALUES (?,?,?,?,?,?,?)',
-              (p['device_id'],p['t'],p['protocol'],VERSION,context['id'] if context else None,mask,reasons))
+    mask, reasons, _ = assess(p, context, previous=previous)
+    state = motion_state(p)
+    c.execute('INSERT OR REPLACE INTO point_quality VALUES (?,?,?,?,?,?,?,?)',
+              (p['device_id'],p['t'],p['protocol'],VERSION,context['id'] if context else None,mask,reasons,state))
     return mask, reasons, context['id'] if context else None
 
 
@@ -469,11 +483,13 @@ def project(row, info=False):
         p[key] = None
     p['valid_pos'] = int(bool(p['valid_pos'] and p['lat'] is not None and p['lon'] is not None))
     p['stationary_context'] = p.get('q_context') if not pending else None
+    p['motion_state'] = (p.get('q_motion_state') if not pending else None) or motion_state(p)
     if info:
         p['quality'] = dict(version=VERSION, pending=pending, excluded_fields=fields,
                             reasons=[dict(code=k,label=label,category=kind) for k,(label,kind) in REASONS.items() if reasons & REASON_BITS[k]],
-                            context_id=p['stationary_context'])
-    for key in ('q_version','q_context','q_mask','q_reasons'):
+                            context_id=p['stationary_context'], motion_state=p['motion_state'],
+                            motion_threshold_g=MOTION_IMPACT_THRESHOLD_G)
+    for key in ('q_version','q_context','q_mask','q_reasons','q_motion_state'):
         p.pop(key, None)
     return p
 
@@ -512,7 +528,8 @@ def build_context(c, sn, start, end, provenance):
                    horizontal_limit_ms=max(limits[k] for k in ('speed','ve','vn')),
                    radial_median_m=radial_median,radial_mad_m=radial_mad,
                    population=count,valid_population=population,training_samples=len(radii),stride=stride,
-                   method='median + 6 × 1.4826 × MAD with engineering noise floors',version=VERSION)
+                   method='v5 tri-axis peak-deviation state; legacy fitted profile retained for audit only',
+                   strategy=MOTION_STRATEGY, motion_threshold_g=MOTION_IMPACT_THRESHOLD_G, version=VERSION)
     scope = dict(device_id=sn,start=start,end=end,kind='confirmed_stationary',profile=profile,provenance=provenance)
     scope['id'] = hashlib.sha256(json.dumps(scope,sort_keys=True).encode()).hexdigest()[:20]
     return scope
@@ -627,18 +644,37 @@ def auto_close_active_context(c, context_id, end, evidence):
 
 
 def backfill(store):
-    """Small atomic batches; restartable, bounded, and shared with ingestion lock."""
+    """Reassess rows in ordered, restartable batches.
+
+    The previous raw sample is carried into each assessment so the only
+    coordinate quarantine rule (a severe one-step jump) is reproduced exactly
+    during the historical replay as it is during live ingestion.
+    """
     written = 0
+    previous_by_device = {}
     with store.ingestion_lock():
         while True:
             with store.connect() as c:
                 scopes = contexts(c)
-                rows = c.execute(JOIN+' WHERE q.version IS NULL OR q.version!=? LIMIT ?',
-                                 (VERSION,BACKFILL_BATCH_SIZE)).fetchall()
+                rows = c.execute(JOIN+' WHERE q.version IS NULL OR q.version!=? '
+                                  'ORDER BY p.device_id,p.t,p.protocol LIMIT ?',
+                                  (VERSION, BACKFILL_BATCH_SIZE)).fetchall()
                 if not rows:
                     break
                 for row in rows:
-                    write_assessment(c, dict(row), scopes)
+                    item = dict(row)
+                    previous = previous_by_device.get(item['device_id'])
+                    if previous is None:
+                        previous = c.execute(
+                            'SELECT * FROM points WHERE device_id=? AND '
+                            '(t<? OR (t=? AND protocol<?)) ORDER BY t DESC,protocol DESC LIMIT 1',
+                            (item['device_id'], item['t'], item['t'], item['protocol'])).fetchone()
+                        previous = dict(previous) if previous else None
+                    write_assessment(c, item, scopes, previous=previous)
+                    previous_by_device[item['device_id']] = {
+                        key: item.get(key) for key in item
+                        if key not in ('q_version','q_context','q_mask','q_reasons','q_motion_state')
+                    }
                 written += len(rows)
     if written:
         # Rollups are derived from the filtered projection.  Any reassessment

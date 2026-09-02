@@ -81,6 +81,7 @@ class Store:
                 PRIMARY KEY(device_id,t,protocol)) WITHOUT ROWID''')
             c.execute('CREATE INDEX IF NOT EXISTS points_source ON points(source)')
             c.executescript(quality.SCHEMA)
+            quality.ensure_schema(c)
 
     def ingestion_lock(self, blocking=True):
         return file_lock(self.path+'.ingest.lock', blocking)
@@ -404,7 +405,8 @@ class Store:
         return dict(version=quality.VERSION,total=total,excluded_samples=excluded,anomaly_samples=anomalies,
                     unavailable_samples=unavailable,status_samples=status,pending_samples=pending,excluded_fields=dict(field_counts),
                     reasons=[dict(code=k,label=label,category=kind,count=reason_counts[k]) for k,(label,kind) in quality.REASONS.items()],
-                    contexts=scopes,policy='状态提示不屏蔽参数；超过 130 km/h 的失真导航解及确认静止段定位偏差按字段隔离；原始值保留，空缺不补零、不插值')
+                    contexts=scopes,
+                    policy=f'运动/静止仅按三轴合成峰值偏差 |√(ax²+ay²+az²)-1|：≤ {quality.MOTION_IMPACT_THRESHOLD_G:.3f} g 为静止，> {quality.MOTION_IMPACT_THRESHOLD_G:.3f} g 为运行；导航初始化、定向未就绪、静止或低速航迹角只提示不剔除。仅隔离超过 {quality.MAX_VALID_VEHICLE_SPEED_KMH:.0f} km/h 的失真导航解和明显位置跳点，原始值保留')
 
     def quality_records(self, sn, start, end, reason='anomaly', offset=0, limit=50):
         if reason == 'anomaly': bits = quality.ANOMALY_BITS
@@ -422,13 +424,19 @@ class Store:
             rows = c.execute(quality.JOIN+where+' ORDER BY p.t DESC,p.protocol LIMIT ? OFFSET ?',(*args,limit,offset)).fetchall()
             scopes = quality.contexts(c,sn)
         items = []
-        for row in rows:
-            p = dict(row)
-            context = quality.context_for(p,scopes)
-            _, _, details = quality.assess(p,context,explain=True)
-            items.append(dict(device_id=sn,t=p['t'],protocol=p['protocol'],version=p['q_version'],context_id=p['q_context'],
-                              details=details,raw_values={k:p[k] for k in quality.BITS if p['q_mask'] & quality.BITS[k]},
-                              source=p['source'],source_offset=p['source_offset']))
+        with self.connect() as detail_connection:
+            for row in rows:
+                p = dict(row)
+                context = quality.context_for(p,scopes)
+                previous = detail_connection.execute(
+                    'SELECT * FROM points WHERE device_id=? AND '
+                    '(t<? OR (t=? AND protocol<?)) ORDER BY t DESC,protocol DESC LIMIT 1',
+                    (p['device_id'],p['t'],p['t'],p['protocol'])).fetchone()
+                _, _, details = quality.assess(p,context,explain=True,
+                                               previous=dict(previous) if previous else None)
+                items.append(dict(device_id=sn,t=p['t'],protocol=p['protocol'],version=p['q_version'],context_id=p['q_context'],
+                                  details=details,raw_values={k:p[k] for k in quality.BITS if p['q_mask'] & quality.BITS[k]},
+                                  source=p['source'],source_offset=p['source_offset']))
         return dict(total=count,offset=offset,limit=limit,items=items,has_more=offset+len(items)<count)
 
     def point(self, sn, t, protocol=None, raw=False):
@@ -439,9 +447,15 @@ class Store:
             p = quality.project(row,info=True)
             if raw:
                 original = dict(row)
-                for key in ('q_version','q_context','q_mask','q_reasons'): original.pop(key,None)
+                for key in ('q_version','q_context','q_mask','q_reasons','q_motion_state'): original.pop(key,None)
                 original['quality'] = p['quality']
-                original['quality']['details'] = quality.assess(original,quality.context_for(original,quality.contexts(c,sn)),True)[2]
+                previous = c.execute(
+                    'SELECT * FROM points WHERE device_id=? AND '
+                    '(t<? OR (t=? AND protocol<?)) ORDER BY t DESC,protocol DESC LIMIT 1',
+                    (sn,original['t'],original['t'],original['protocol'])).fetchone()
+                original['quality']['details'] = quality.assess(
+                    original, quality.context_for(original,quality.contexts(c,sn)), True,
+                    dict(previous) if previous else None)[2]
                 original['filtered_values'] = {k:p[k] for k in NUMERIC}
                 original['data_view'] = 'raw_evidence'
                 return describe(original)
@@ -602,8 +616,6 @@ class Ingestor:
         self.states = {}
         self.file_cache = {}
         self.quality_contexts = []
-        self.stationary_entry = quality.AutomaticStationaryEntryDetector()
-        self.stationary_exit = quality.ActiveStationaryExitDetector()
 
     def _event(self, c, p, state, kind, value, threshold, severity, dwell, rules):
         active = state['active']
@@ -634,55 +646,24 @@ class Ingestor:
                       (sn,'CGI-430 · '+sn,json.dumps(DEFAULTS),p['t'],p['t'],stat.st_mtime,json.dumps(p)))
             device_row = c.execute('SELECT * FROM devices WHERE id=?',(sn,)).fetchone()
         rules = json.loads(device_row['rules'])
+        # Read the preceding immutable sample before inserting the current
+        # one.  It is used only for the conservative severe-jump check; the
+        # tri-axis motion state itself is independent of navigation fields.
+        previous = c.execute(
+            'SELECT * FROM points WHERE device_id=? AND '
+            '(t<? OR (t=? AND protocol<?)) ORDER BY t DESC,protocol DESC LIMIT 1',
+            (sn, p['t'], p['t'], p['protocol'])).fetchone()
         keys = list(p)
         result = c.execute(f'INSERT OR IGNORE INTO points ({",".join(keys)}) VALUES ({",".join("?" for _ in keys)})',list(p.values()))
         if not result.rowcount:
             return False
         raw_point = p
-        active_context = quality.context_for(p,self.quality_contexts)
         late = p['t'] < device_row['last_t']
-        entry_evidence = None
-        if late:
-            # A late historical frame must never move a live lifecycle boundary
-            # backwards or delete assessments for newer samples.
-            if active_context:
-                self.stationary_exit.forget(active_context['id'])
-            self.stationary_entry.forget(sn)
-            exit_evidence = None
-        elif active_context:
-            self.stationary_entry.forget(sn)
-            exit_evidence = self.stationary_exit.observe(p,active_context)
-        else:
-            exit_evidence = None
-            entry_evidence = self.stationary_entry.observe(p)
-        reassessed_buckets = set()
-        if entry_evidence:
-            # Like automatic exit, entry is retrospective: once two minutes of
-            # independent evidence agree, reclassify from the candidate start.
-            scope = quality.auto_open_stationary_context(c,p,entry_evidence)
-            self.quality_contexts = quality.contexts(c)
-            active_context = next(item for item in self.quality_contexts if item['id'] == scope['id'])
-            for point_row in c.execute('SELECT * FROM points WHERE device_id=? AND t>=? AND t<? ORDER BY t,protocol',
-                                       (sn,entry_evidence['candidate_start'],p['t'])):
-                quality.write_assessment(c,dict(point_row),self.quality_contexts)
-                reassessed_buckets.add(bucket_start(point_row['t']))
-            self.store.bump_query_cache_epoch(c)
-        if exit_evidence:
-            # Confirmation is retrospective: once the full evidence window is
-            # satisfied, restore every candidate sample to the ordinary motion
-            # projection rather than losing the first 10-15 seconds of a run.
-            close_end = exit_evidence['candidate_start'] - .001
-            quality.auto_close_active_context(c,active_context['id'],close_end,exit_evidence)
-            self.quality_contexts = quality.contexts(c)
-            for point_row in c.execute('SELECT * FROM points WHERE device_id=? AND t>? AND t<? ORDER BY t,protocol',
-                                       (sn,close_end,p['t'])):
-                quality.write_assessment(c,dict(point_row),self.quality_contexts)
-                reassessed_buckets.add(bucket_start(point_row['t']))
-            self.store.bump_query_cache_epoch(c)
-        mask, reasons, context_id = quality.write_assessment(c,p,self.quality_contexts)
-        if reassessed_buckets:
-            reassessed_buckets.add(bucket_start(p['t']))
-            self.store.rebuild_rollup_buckets(c,sn,reassessed_buckets)
+        # Lifecycle contexts from v1-v4 are audit records only.  The current
+        # rule is evaluated point-by-point and never opens a speed/position
+        # based stationary context.
+        mask, reasons, context_id = quality.write_assessment(
+            c, p, self.quality_contexts, previous=dict(previous) if previous else None)
         p = quality.project(dict(p,q_version=quality.VERSION,q_mask=mask,q_reasons=reasons,q_context=context_id))
         if sn not in self.states or self.states[sn]['version'] != rules['version']:
             prev = c.execute(quality.JOIN+' WHERE p.device_id=? AND p.t<? ORDER BY p.t DESC LIMIT 1',(sn,p['t'])).fetchone()

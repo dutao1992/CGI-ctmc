@@ -249,7 +249,7 @@ def analyze_stream(source, byte_size, rule_resolver=None, mount_mode='auto', com
     finally:
         if text is not None: text.close()
     span = max(.001,last-first)
-    bins = 360 if span>7*86400 else 480 if span>86400 else 600 if span>6*3600 else 700
+    bins = 320 if span>7*86400 else 420 if span>86400 else 520 if span>6*3600 else 420
     end = last if last>first else first+.001
     combiner = QueryCombiner(device,first,end,bins)
     for snapshot in snapshots: combiner.add(snapshot)
@@ -261,7 +261,7 @@ def analyze_stream(source, byte_size, rule_resolver=None, mount_mode='auto', com
         rule_source=rule_source,rule_version=rules['version'],mount_confirmed=bool(mount_confirmed),
         persisted=False,limits=dict(max_bytes=limit,max_rows=MAX_ROWS,max_span_days=31))
     result['aggregation']['query_ms'] = round((time.perf_counter()-began)*1000,1)
-    result['aggregation']['method'] = '离线有效数据按时间桶计算均值/最小/最大；不补零、不插值；轨迹、区段和候选事件使用当前在线同口径算法'
+    result['aggregation']['method'] = '离线有效数据按三轴合成峰值偏差（≤ 0.005 g 静止，> 0.005 g 运行）和时间桶计算；不补零、不插值；轨迹、区段和候选事件使用当前在线同口径算法'
     return result
 
 

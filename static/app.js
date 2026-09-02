@@ -20,6 +20,7 @@ const views = {overview:['每一段轨迹，都有数据可循','从运行轨迹
 const colors = ['#397c63','#c38a42','#729dc1'];
 const VIBRATION_VIEW_MODE = 'range';
 const SHOCK_REFERENCE_G = 0.8;
+const MOTION_THRESHOLD_G = 0.005;
 const OVERVIEW_TIME_GROUP = 'overview-speed-vibration';
 let overviewTimeLinked = false;
 let map,routeLayer,eventLayer,playMarker,tileLayer,resizeTimer;
@@ -79,7 +80,9 @@ function clearResults(message){
     if(note)note.textContent='10 Hz 只能观察 0–4 Hz 低频载体振动；不对缺测数据补零或插值。';
   }
 }
-function visualBins(span){return span>7*86400?360:span>86400?480:span>6*3600?600:700;}
+// Fewer display buckets keep filtered curve redraws responsive while the
+// server still retains raw values and exact min/max envelopes.
+function visualBins(span){return span>7*86400?320:span>86400?420:span>6*3600?520:420;}
 function editRange(){
   state.rangeMode='custom';state.pendingQuery=null;++state.request;
   $('autoRefresh').checked=false;$('autoRefresh').disabled=true;
@@ -155,7 +158,7 @@ async function runQueries(){
       $('aggregationLabel').textContent=`${aggregation.buckets||0} 个时间桶 · 已过滤${resolution}${timing}${aggregation.cache_hit?' · 缓存':''}`;
       const q=data.quality;
       $('filterBanner').hidden=!q;
-      if(q)$('filterBanner').innerHTML=`<div><strong>有效测量视图 · 过滤 v${q.version}</strong><span>${q.total.toLocaleString()} 条原始采样中，${q.anomaly_samples.toLocaleString()} 条含静止定位偏差，${(q.status_samples||0).toLocaleString()} 条有导航状态提示；状态提示不屏蔽参数，只有异常经纬度被隔离。${q.pending_samples?` ${q.pending_samples} 条待判定，测量暂不展示。`:''}</span></div><button class="text-button" data-goto="quality">查看剔除原值 ↗</button>`;
+      if(q)$('filterBanner').innerHTML=`<div><strong>有效测量视图 · 过滤 v${q.version}</strong><span>${q.total.toLocaleString()} 条原始采样；运动/静止按三轴合成峰值偏差 ≤ 0.005 g / &gt; 0.005 g 判定。${q.anomaly_samples.toLocaleString()} 条含异常字段，${(q.status_samples||0).toLocaleString()} 条有导航状态提示；状态提示不屏蔽参数，只有失真速度和明显位置跳点被隔离。${q.pending_samples?` ${q.pending_samples} 条待判定，测量暂不展示。`:''}</span></div><button class="text-button" data-goto="quality">查看剔除原值 ↗</button>`;
       renderOverview();renderEvents();renderMap();
       if(state.view==='signals')renderSignals();
       if(state.view==='quality')renderQuality();
@@ -196,12 +199,11 @@ function stationaryRange(contexts,start,end){
 }
 function renderOverview(){
   const d=state.data,s=d.summary;
-  const stationary=stationaryRange(d.quality?.contexts,s.first_t,s.last_t);
-  const cards=[['估算运行里程',number(s.distance_km,2),'km',stationary?'已确认静止':'有效连续速度积分'],['有效运动时间',number(s.moving_s/60,1),'min',stationary?'不将漂移计作运动':'速度 ≥ 3.6 km/h'],[stationary?'静止速度残差峰值':'最高有效速度',number(s.max_kmh,2),'km/h',stationary?'滤后残差 ≠ 行驶速度':'剔除异常后的采样'],['RTK 固定解占比',number(s.fixed_pct,1),'%','固定解 ≠ 精度承诺'],['异常 / 质量事件',String(d.events.total),'项',`${s.gap_count} 处数据时间断档`]];
+  const cards=[['估算运行里程',number(s.distance_km,2),'km','仅三轴判定为运行且定位连续'],['有效运动时间',number(s.moving_s/60,1),'min','三轴峰值偏差 > 0.005 g'],['最高有效速度',number(s.max_kmh,2),'km/h','剔除异常速度和位置跳点'],['RTK 固定解占比',number(s.fixed_pct,1),'%','固定解 ≠ 精度承诺'],['异常 / 质量事件',String(d.events.total),'项',`${s.gap_count} 处数据时间断档`]];
   $('kpis').innerHTML=cards.map(([k,v,u,n])=>`<div class="kpi"><div class="kpi-label">${k}</div><div class="kpi-value">${d.total?v:'—'}<small>${u}</small></div><div class="kpi-note">${d.total?n:'所选时段无采样'}</div></div>`).join('');
-  $('segments').innerHTML=d.segments.length?d.segments.slice(0,8).map(s=>`<div class="compact-row"><div><strong>${s.state==='confirmed_stationary'?'已确认静止':s.state==='moving'?'运行区段':s.state==='stopped'?'停留区段':'测量不可用'}</strong><small>${clock(s.start)} — ${clock(s.end)}</small></div><span>${duration(s.end-s.start)} · ${number(s.distance_m/1000,2)} km</span></div>`).join(''):'<div class="empty">暂无持续 30 秒以上的连续区段<br>不将静止定位漂移计作运行里程</div>';
+  $('segments').innerHTML=d.segments.length?d.segments.slice(0,8).map(s=>`<div class="compact-row"><div><strong>${s.state==='stationary'?'静止区段':s.state==='moving'?'运行区段':'测量不可用'}</strong><small>${clock(s.start)} — ${clock(s.end)}</small></div><span>${duration(s.end-s.start)} · ${number(s.distance_m/1000,2)} km</span></div>`).join(''):'<div class="empty">暂无持续 30 秒以上的连续区段</div>';
   $('eventPreview').innerHTML=d.events.items.length?d.events.items.slice(0,5).map(e=>`<div class="compact-row"><div class="event-kind"><div><strong>${esc(e.label)}</strong><small>${clock(e.start)} — ${clock(e.end)} · ${duration(e.end-e.start)}</small></div></div><button class="text-button" data-event-locate="${e.id}">定位 ↗</button></div>`).join(''):'<div class="empty">所选时段没有触发已启用的规则</div>';
-  buildChart('speedChart',[['speed',stationary?'静止速度残差':'车辆速度','km/h',3.6]],{compact:true,stationary,threshold:stationary?undefined:state.device.rules.speed_kmh,tooltipFormatter:overviewTimeTooltip});
+  buildChart('speedChart',[['speed','车辆速度','km/h',3.6]],{compact:true,threshold:state.device.rules.speed_kmh,tooltipFormatter:overviewTimeTooltip});
   renderVibration('overview',VIBRATION_VIEW_MODE);
   linkOverviewTimeCharts();
 }
@@ -218,30 +220,27 @@ function renderMap(){
   const points=state.data.track;
   let line=[];
   const flush=()=>{if(line.length>1)L.polyline(line,{color:'#41735b',weight:3,opacity:.85}).addTo(routeLayer);line=[];};
-  for(const p of points){if(p.break_before||p.stationary_context)flush();if(!p.stationary_context)line.push(mapLatLng(p));}
+  for(const p of points){if(p.break_before)flush();line.push(mapLatLng(p));}
   flush();
   if(points.length){
     const start=points[0],end=points.at(-1);
-    L.circleMarker(mapLatLng(start),{radius:6,color:'#fff',weight:2,fillColor:'#638b4c',fillOpacity:1}).addTo(routeLayer).bindTooltip(start.stationary_context?'已确认静止 · 估计位置':'起点 '+clock(start.t));
-    L.circleMarker(mapLatLng(end),{radius:6,color:'#fff',weight:2,fillColor:'#284f40',fillOpacity:1}).addTo(routeLayer).bindTooltip(end.stationary_context?'已确认静止 · 估计位置':'终点 '+clock(end.t));
+    L.circleMarker(mapLatLng(start),{radius:6,color:'#fff',weight:2,fillColor:'#638b4c',fillOpacity:1}).addTo(routeLayer).bindTooltip(`${start.motion_state==='stationary'?'静止':'起点'} · ${clock(start.t)}`);
+    L.circleMarker(mapLatLng(end),{radius:6,color:'#fff',weight:2,fillColor:'#284f40',fillOpacity:1}).addTo(routeLayer).bindTooltip(`${end.motion_state==='stationary'?'静止':'终点'} · ${clock(end.t)}`);
     playMarker=L.circleMarker(mapLatLng(start),{radius:8,color:'#fff',weight:3,fillColor:'#c88a35',fillOpacity:1}).addTo(map);
   }
   for(const e of state.data.events.items.slice(0,150)){
     const p=nearestPoint(e.point_t);
     if(p&&Math.abs(p.t-e.point_t)<Math.max(3,state.data.aggregation.bucket_s))L.circleMarker(mapLatLng(p),{radius:4,color:'#be8341',weight:2,fillOpacity:.5}).addTo(eventLayer).bindTooltip(esc(e.label)+' · '+clock(e.start)).on('click',()=>locateEvent(e.id));
   }
-  const motionPoints=points.filter(point=>!point.stationary_context);
-  $('timeline').min=state.data.summary.first_t||0;$('timeline').max=state.data.summary.last_t||0;$('timeline').step=.1;$('timeline').disabled=!points.length;$('playBtn').disabled=motionPoints.length<2;
+  $('timeline').min=state.data.summary.first_t||0;$('timeline').max=state.data.summary.last_t||0;$('timeline').step=.1;$('timeline').disabled=!points.length;$('playBtn').disabled=points.length<2;
   if(!points.length)$('playTime').textContent='--:--:--';
   $('coordinateReadout').textContent=points.length?`等待选定有效采样 · ${points.length.toLocaleString()} 个回放锚点`:'本时段无有效位置，未绘制轨迹';
-  const stationaryScopes=state.data.quality?.contexts||[];
-  $('stationaryMapNote').hidden=!stationaryScopes.length;
-  $('stationaryMapNote').textContent='已确认静止的区段仅标示稳健估计位置，不连接定位漂移。地图点不是实测真值；下方坐标为当前保留采样，不能按厘米级精度解读。';
+  $('stationaryMapNote').hidden=!points.some(point=>point.motion_state==='stationary');
+  $('stationaryMapNote').textContent='轨迹保留运行与静止期间的有效定位；仅对明显单步位置跳变断线并隔离经纬度。静止期间使用导航模式保留的位置采样。';
   fitMap();
 }
 function mapLatLng(p){
-  const scope=state.data?.quality?.contexts.find(c=>c.id===p.stationary_context&&p.t>=c.start&&p.t<=scopeEnd(c));
-  return CTMCMap.latLng(scope?scope.profile.anchor:p);
+  return CTMCMap.latLng(p);
 }
 function fitMap(){if(routeLayer?.getLayers().length)map.fitBounds(routeLayer.getBounds().pad(.12),{maxZoom:17,animate:false});}
 function nearestPoint(t){
@@ -257,9 +256,9 @@ function playbackPoint(t){
   if(hi>=list.length)return list.at(-1);
   const left=list[hi-1],right=list[hi];
   if(right.t===t)return right;
-  // Never draw a synthetic position across an explicit route break, a
-  // confirmed-stationary estimate, or a recorded data gap.
-  if(left.stationary_context||right.stationary_context||right.break_before||
+  // Never draw a synthetic position across an explicit route break or a
+  // recorded data gap.
+  if(right.break_before||
      (state.data.gaps||[]).some(g=>g[0]<t&&t<g[1]))return nearestPoint(t);
   if(![left.lat,left.lon,right.lat,right.lon].every(Number.isFinite))return nearestPoint(t);
   const span=right.t-left.t;
@@ -272,7 +271,7 @@ function playbackPoint(t){
 function selectTime(t){
   state.playT=t;$('timeline').value=t;$('playTime').textContent=clock(t);
   const p=playbackPoint(t);
-  if(p){playMarker?.setLatLng(mapLatLng(p));$('coordinateReadout').textContent=`${number(p.lon,7)}° E / ${number(p.lat,7)}° N · ${number(kmh(p.speed),2)} km/h${p.stationary_context?' · 静止残差':''}${p._interpolated?' · 回放插值':''}${Math.abs(p.t-t)>3&&!p._interpolated?' · 邻近采样（当前时刻可能缺测）':''}`;}
+  if(p){playMarker?.setLatLng(mapLatLng(p));$('coordinateReadout').textContent=`${number(p.lon,7)}° E / ${number(p.lat,7)}° N · ${number(kmh(p.speed),2)} km/h${p.motion_state==='stationary'?' · 静止':''}${p._interpolated?' · 回放插值':''}${Math.abs(p.t-t)>3&&!p._interpolated?' · 邻近采样（当前时刻可能缺测）':''}`;}
 }
 function stopPlay(){state.playing=false;lastTick=0;$('playBtn').textContent='▶';$('playBtn').setAttribute('aria-label','播放轨迹');}
 let lastTick=0;
@@ -391,7 +390,7 @@ function vibrationChart(id,kind,vibration,mode='window'){
   const common={animation:false,textStyle:{fontFamily:'PingFang SC, sans-serif'},grid:{left:52,right:20,top:rangeMode?38:18,bottom:compact?36:48},legend:rangeMode?{show:true,top:8,left:55,itemWidth:14,itemHeight:2,textStyle:{fontSize:9,color:'#788d6d'}}:{show:false},tooltip:{trigger:'axis',renderMode:'html',confine:true,backgroundColor:'#fff',borderColor:'#d4dec9',textStyle:{fontSize:10,color:'#315c45'},valueFormatter:value=>number(value,5),axisPointer:{type:'line',snap:true,lineStyle:{color:'#b9793b',width:1,dashOffset:3}}},graphic:[{type:'text',left:'center',top:'middle',invisible:available,style:{text:vibration?.reason||'本时段没有可用的连续振动窗',fill:'#7a8970',fontSize:11,lineHeight:20,textAlign:'center'}}]};
   if(kind==='time'){
     const rows=available?(rangeMode?vibration.series:vibration.time):[];
-    const shockLine={symbol:'none',label:{formatter:`冲击参考线 ${number(SHOCK_REFERENCE_G,2)} g`,position:'insideStartTop',fontSize:9,color:'#a76b3d',backgroundColor:'#fffaf1',padding:[2,3]},lineStyle:{type:'dashed',width:1.2,color:'#be7e46'},data:[{yAxis:SHOCK_REFERENCE_G}]};
+    const shockLine={symbol:'none',label:{fontSize:9,color:'#a76b3d',backgroundColor:'#fffaf1',padding:[2,3]},lineStyle:{type:'dashed',width:1.2,color:'#be7e46'},data:[{yAxis:MOTION_THRESHOLD_G,label:{formatter:`运动判定 ${number(MOTION_THRESHOLD_G,3)} g`,position:'insideEndTop'}},{yAxis:SHOCK_REFERENCE_G,label:{formatter:`冲击参考线 ${number(SHOCK_REFERENCE_G,2)} g`,position:'insideStartTop'}}]};
     const rangeSeries=[{name:'桶内 RMS 动态幅值',type:'line',data:rows.map(row=>[row[0],row[1]]),showSymbol:false,lineStyle:{width:2,color:'#c0833c'},areaStyle:{color:'#c0833c18'},itemStyle:{color:'#c0833c'},connectNulls:false},{name:'桶内峰值偏差',type:'line',data:rows.map(row=>[row[0],row[2]]),showSymbol:false,lineStyle:{width:1.3,color:'#386f5b'},itemStyle:{color:'#386f5b'},connectNulls:false,markLine:shockLine}];
     const windowSeries=[{name:'动态合成比力',type:'line',data:rows.map(row=>[row[0],row[1]]),showSymbol:false,lineStyle:{width:1.25,color:'#386f5b'},itemStyle:{color:'#386f5b'},connectNulls:false},{name:'1 秒 RMS 包络',type:'line',data:rows.map(row=>[row[0],row[2]]),showSymbol:false,lineStyle:{width:2,color:'#c0833c'},areaStyle:{color:'#c0833c18'},itemStyle:{color:'#c0833c'},connectNulls:false,markLine:shockLine}];
     const tooltip=rangeMode?{...common.tooltip,formatter:id==='overviewVibrationTimeChart'?params=>overviewVibrationTooltip(params,rows):params=>{const list=Array.isArray(params)?params:[params],first=list[0],timestamp=first?.value?.[0]??first?.data?.[0],row=rows[first?.dataIndex]||rows.find(item=>item[0]===timestamp);if(!row)return '';return `${chartClock(timestamp).replace(/\n/g,' ')}<br/>桶内 RMS 动态幅值：${number(row[1],5)} g<br/>桶内峰值偏差：${number(row[2],5)} g<br/>均值合成比力：${number(row[3],5)} g<br/>桶内范围：${number(row[4],5)} – ${number(row[5],5)} g<br/>有效值：${number(row[6],0)} 点`;}}:common.tooltip;
@@ -414,7 +413,7 @@ function renderVibration(prefix,mode='window'){
   const all=state.data?.vibration||{},vibration=mode==='range'?(all.range||{available:false,reason:'查询结果中没有筛选时段振动值'}):all,status=$(prefix+'VibrationState'),metrics=$(prefix+'VibrationMetrics'),note=$(prefix+'VibrationNote');
   if(!status||!metrics||!note)return;
   const configuredShock=Number.isFinite(+(state.device?.rules||{}).shock_g)?+(state.device?.rules||{}).shock_g:null;
-  const shockNote=` 虚线为冲击参考线 ${number(SHOCK_REFERENCE_G,2)} g；最终告警仍按三轴合成比力规则判定${Number.isFinite(configuredShock)&&configuredShock!==SHOCK_REFERENCE_G?`（设备当前事件阈值 ${number(configuredShock,2)} g）`:''}。`;
+  const shockNote=` 虚线为运动判定 ${number(MOTION_THRESHOLD_G,3)} g 和冲击参考线 ${number(SHOCK_REFERENCE_G,2)} g；最终告警仍按三轴合成比力规则判定${Number.isFinite(configuredShock)&&configuredShock!==SHOCK_REFERENCE_G?`（设备当前事件阈值 ${number(configuredShock,2)} g）`:''}。`;
   status.className='status-pill '+(vibration.available?'good':'warn');
   if(vibration.available){
     const values=vibration.metrics;
@@ -432,7 +431,14 @@ function renderVibration(prefix,mode='window'){
   vibrationChart(prefix+'VibrationSpectrumChart','spectrum',mode==='range'?all:vibration,'window');
 }
 function derivedStationaryAt(t){
-  return (state.data?.quality?.contexts||[]).some(scope=>scope.start<=t&&(scope.end===null||scope.end===undefined||t<=scope.end));
+  const rows=state.data?.motion_states||[];
+  if(rows.length){
+    let nearest=rows[0],distance=Math.abs(rows[0][0]/1000-t);
+    for(const row of rows){const candidate=Math.abs(row[0]/1000-t);if(candidate<distance){nearest=row;distance=candidate;}}
+    return nearest[1]==='stationary';
+  }
+  const point=nearestPoint(t);
+  return point?.motion_state==='stationary';
 }
 function derivedAccelerationData(){
   const rows=state.data?.series?.speed||[],bucket=Number(state.data?.aggregation?.bucket_s)||1;
@@ -440,7 +446,7 @@ function derivedAccelerationData(){
   for(const row of rows){
     const t=Number(row?.[0]),speed=Number(row?.[1]);
     if(!Number.isFinite(t))continue;
-    const usable=Number.isFinite(speed)&&!derivedStationaryAt(t/1000);
+    const usable=Number.isFinite(speed);
     if(!usable){if(previous)out.push([t-1,null]);previous=null;continue;}
     if(previous){
       const delta=(t-previous.t)/1000;
@@ -459,7 +465,7 @@ function decisionEvents(mode){
   }).filter(Boolean);
 }
 function decisionExclusionAreas(){
-  return (state.data?.quality?.contexts||[]).map(scope=>[{xAxis:Math.max(state.data.start,scope.start)*1000},{xAxis:Math.min(state.data.end,scope.end??state.data.end)*1000}]).filter(([left,right])=>left.xAxis<right.xAxis);
+  return [];
 }
 function buildDecisionChart(id,mode){
   const element=$(id);if(!element||!window.echarts||!state.data)return;
@@ -468,7 +474,7 @@ function buildDecisionChart(id,mode){
   const acceleration=mode==='acceleration';
   const rows=acceleration?derivedAccelerationData():(state.data.vibration?.range?.series||[]).map(row=>[row[0],Number.isFinite(+row[2])?+row[2]:null]);
   const events=decisionEvents(mode),hasValues=rows.some(row=>Number.isFinite(row[1]))||events.length>0;
-  const thresholds=acceleration?[{yAxis:Number(state.device?.rules?.accel_ms2)||3,label:{formatter:`急加速上限 ${number(Number(state.device?.rules?.accel_ms2)||3,2)} m/s²`,position:'insideEndTop'}},{yAxis:-(Number(state.device?.rules?.brake_ms2)||3.5),label:{formatter:`急减速下限 −${number(Number(state.device?.rules?.brake_ms2)||3.5,2)} m/s²`,position:'insideStartBottom'}}]:[{yAxis:SHOCK_REFERENCE_G,label:{formatter:`冲击参考线 ${number(SHOCK_REFERENCE_G,2)} g`,position:'insideEndTop'}}];
+  const thresholds=acceleration?[{yAxis:Number(state.device?.rules?.accel_ms2)||3,label:{formatter:`急加速上限 ${number(Number(state.device?.rules?.accel_ms2)||3,2)} m/s²`,position:'insideEndTop'}},{yAxis:-(Number(state.device?.rules?.brake_ms2)||3.5),label:{formatter:`急减速下限 −${number(Number(state.device?.rules?.brake_ms2)||3.5,2)} m/s²`,position:'insideStartBottom'}}]:[{yAxis:MOTION_THRESHOLD_G,label:{formatter:`静止/运行阈值 ${number(MOTION_THRESHOLD_G,3)} g`,position:'insideEndTop'}},{yAxis:SHOCK_REFERENCE_G,label:{formatter:`冲击参考线 ${number(SHOCK_REFERENCE_G,2)} g`,position:'insideStartTop'}}];
   const plottedValues=rows.map(row=>row[1]).concat(events.map(row=>row[1])).filter(value=>Number.isFinite(value)),thresholdValues=thresholds.map(line=>line.yAxis),axisMin=acceleration?Math.min(0,...plottedValues,...thresholdValues):0,axisMax=Math.max(0,...plottedValues,...thresholdValues),axisPad=Math.max((axisMax-axisMin)*.08,acceleration?.1:.02),decisionAxisMax=Number((axisMax+axisPad).toPrecision(6)),exclusionAreas=decisionExclusionAreas();
   const line={name:acceleration?'速度变化率':'三轴合成峰值偏差',type:'line',data:rows,showSymbol:false,progressive:2000,progressiveThreshold:3000,lineStyle:{width:1.8,color:acceleration?'#397c63':'#386f5b'},areaStyle:acceleration?undefined:{color:'#386f5b12'},itemStyle:{color:acceleration?'#397c63':'#386f5b'},connectNulls:false,markArea:exclusionAreas.length?{silent:true,itemStyle:{color:'#8e9a8317'},label:{show:false},data:exclusionAreas}:undefined,markLine:{symbol:'none',label:{fontSize:9,color:'#a76b3d',backgroundColor:'#fffaf1',padding:[2,3]},lineStyle:{type:'dashed',width:1.2,color:'#be7e46'},data:thresholds}};
   const marker={name:acceleration?'急加减速事件':'三轴冲击事件',type:'scatter',data:events,symbol:'diamond',symbolSize:9,itemStyle:{color:'#bb6d38'},z:9};
@@ -482,7 +488,7 @@ function renderDecisionCurves(){
   const accelerationPoints=derivedAccelerationData().filter(row=>Number.isFinite(row[1])).length,accelerationEvents=decisionEvents('acceleration').length;
   const shockRows=(state.data.vibration?.range?.series||[]).filter(row=>Number.isFinite(+row[2])).length,shockEvents=decisionEvents('shock').length;
   $('signalAccelerationNote').textContent=state.data.total?`正值为加速、负值为减速；${accelerationPoints.toLocaleString()} 个速度变化率点，${accelerationEvents.toLocaleString()} 项事件峰值已标记。曲线按筛选后的速度时间桶均值计算，不跨缺测或静止隔离段。`:'所选时段无采样，无法生成急加减速判定曲线。';
-  $('signalShockNote').textContent=state.data.total?`${shockRows.toLocaleString()} 个三轴合成峰值偏差时间桶，${shockEvents.toLocaleString()} 项冲击事件峰值已标记。虚线为 ${number(SHOCK_REFERENCE_G,2)} g 参考线；不对缺测或静止隔离值补零。`:'所选时段无采样，无法生成三轴冲击判定曲线。';
+  $('signalShockNote').textContent=state.data.total?`${shockRows.toLocaleString()} 个三轴合成峰值偏差时间桶，${shockEvents.toLocaleString()} 项冲击事件峰值已标记。${number(MOTION_THRESHOLD_G,3)} g 虚线是静止/运行判定线，${number(SHOCK_REFERENCE_G,2)} g 虚线是冲击报警参考线；不对缺测值补零。`:'所选时段无采样，无法生成三轴冲击判定曲线。';
 }
 const chartGroups=[
  ['姿态角','°',[['pitch','俯仰','°'],['roll','横滚','°']],'机体相对水平的俯仰和横滚转角。'],
@@ -513,9 +519,8 @@ function signalRemovalNote(metrics){
 function renderSignals(){
   renderDecisionCurves();
   if(!$('signalCharts').children.length)$('signalCharts').innerHTML=chartGroups.map(([title,unit],i)=>`<section class="panel"><div class="panel-head"><h2>${title}<span class="h2-unit">${unit}</span></h2><span class="muted">${String(i+1).padStart(2,'0')}</span></div><div class="chart" id="signal-${i}"></div><p class="signal-data-note" id="signal-note-${i}"></p></section>`).join('');
-  const stationary=stationaryRange(state.data.quality?.contexts,state.data.summary.first_t,state.data.summary.last_t);
   chartGroups.forEach(([title,unit,metrics,explanation],i)=>{
-    buildChart('signal-'+i,metrics,{stationary,threshold:metrics[0][0]==='speed'&&!stationary?state.device.rules.speed_kmh:metrics[0][0]==='age'?state.device.rules.age_s:undefined});
+    buildChart('signal-'+i,metrics,{threshold:metrics[0][0]==='speed'?state.device.rules.speed_kmh:metrics[0][0]==='age'?state.device.rules.age_s:undefined});
     $('signal-note-'+i).textContent=(!state.data.total?'所选时段无采样。 ':signalRemovalNote(metrics)+' ')+(explanation||'');
   });
 }
@@ -592,7 +597,7 @@ function renderOfflineAnalysis(){
   const facts=[['设备 SN',data.device_id],['文件数据量',`${data.offline.rows.toLocaleString()} 行 · ${formatBytes(data.offline.bytes)}`],['覆盖时间',duration(Math.max(0,data.end-data.start))],['规则来源',data.offline.rule_source],['安装方向',data.offline.mount_confirmed?'本次按已确认分析':'未确认 · 不判姿态/冲击'],['结果去向','仅本次内存 · 未写入生产库']];
   $('offlineFacts').innerHTML=facts.map(([label,value])=>`<div class="snapshot-row"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join('');
   const segments=data.segments.slice(0,100);
-  $('offlineSegments').innerHTML=segments.length?segments.map(segment=>`<div class="compact-row"><div><strong>${segment.state==='confirmed_stationary'?'已确认静止':segment.state==='moving'?'运行区段':segment.state==='stopped'?'停留区段':'测量不可用'}</strong><small>${stamp(segment.start)} — ${clock(segment.end)}</small></div><span>${duration(segment.end-segment.start)} · ${number(segment.distance_m/1000,2)} km</span></div>`).join(''):'<div class="empty">没有持续 30 秒以上的可识别区段</div>';
+  $('offlineSegments').innerHTML=segments.length?segments.map(segment=>`<div class="compact-row"><div><strong>${segment.state==='stationary'?'静止区段':segment.state==='moving'?'运行区段':'测量不可用'}</strong><small>${stamp(segment.start)} — ${clock(segment.end)}</small></div><span>${duration(segment.end-segment.start)} · ${number(segment.distance_m/1000,2)} km</span></div>`).join(''):'<div class="empty">没有持续 30 秒以上的可识别区段</div>';
   const events=data.events.items.slice(0,100);$('offlineEventCount').textContent=`${data.events.total.toLocaleString()} 项`;
   $('offlineEvents').innerHTML=events.length?`<div class="table-scroll"><table><thead><tr><th>候选事件</th><th>时间</th><th>峰值 / 判据</th></tr></thead><tbody>${events.map(event=>`<tr><td><button class="text-button offline-event-link" data-offline-event="${event.id}">${esc(event.label)} ↗</button><small>${event.severity==='info'?'质量提示':'业务 / 设备预警'}</small></td><td>${stamp(event.start)}<small>至 ${clock(event.end)}</small></td><td>${number(event.peak,2)} / ${number(event.threshold,2)}<small>${event.samples} 个触发采样</small></td></tr>`).join('')}</tbody></table></div><div class="table-footer">离线重新计算的候选事件，不含在线确认或关闭状态。${data.events.truncated?'仅显示最近 2,000 项。':''}</div>`:'<div class="empty">当前规则下没有异常告警候选</div>';
   $('offlineAggregationLabel').textContent=`${data.aggregation.buckets} 个时间桶 · ${number(data.aggregation.query_ms,0)} ms`;
@@ -650,16 +655,9 @@ const fieldUnits={lat:'°',lon:'°',alt:'m',speed:'m/s',ve:'m/s',vn:'m/s',vu:'m/
 function renderFilterSummary(){
   const q=state.data?.quality;
   if(!q){$('filterSummary').innerHTML='<div class="empty">查询设备后显示过滤统计</div>';return;}
-  const cards=[['原始采样',q.total,'原值保留，不物理删除'],['异常剔除采样',q.anomaly_samples,'超 130 km/h 导航解或静止定位漂移'],['导航状态提示采样',q.status_samples||0,'初始化、未定向、低速航迹角均保留显示']];
-  const scopes=q.contexts.map(c=>{
-    const automatic=c.closure?.action==='quality.stationary_context.auto_close',historical=c.origin?.action==='quality.stationary_context.historical_replay',autoOpened=c.origin?.action==='quality.stationary_context.auto_open',policy=c.auto_exit_policy,vehicle=policy?.vehicle_motion;
-    const status=c.active?(autoOpened?'实时自动识别静止':'持续静止 · 自动防护'):automatic?'已自动恢复运动规则':historical?'历史算法回放静止':'用户确认静止';
-    const lifecycle=c.active
-      ? `后续采样使用静止参考。低速小推车路径要求组合导航、RTK 固定/浮点、定位 σ ≤ ${number(policy?.max_position_std_m,1)} m、速度 ≥ ${number(policy?.min_speed_ms,2)} m/s，持续 ${number(policy?.min_duration_s,0)} 秒且净位移 ≥ ${number(policy?.min_displacement_m,0)} m；车辆路径允许卫导或组合导航，但要求速度 ≥ ${number(vehicle?.min_speed_ms,1)} m/s、定位 σ ≤ ${number(vehicle?.max_position_std_m,1)} m，持续 ${number(vehicle?.min_duration_s,0)} 秒、净位移 ≥ ${number(vehicle?.min_displacement_m,0)} m、轨迹有效率 ≥ ${number((vehicle?.min_path_efficiency||0)*100,0)}%，并核对速度积分与坐标位移一致。两条路径均须离锚点 ≥ ${number(policy?.min_anchor_distance_m,0)} m；出发前仍可主动关闭。`
-      : automatic?`系统于 ${sampleStamp(c.closure.detected_at||c.end)} 确认持续运动后自动关闭；普通运动规则已恢复。`:historical?'由 v4 对原始采样全量回放得到；进入与退出均满足多信号证据，仅此区间使用静止参考。':'仅此区间使用静止参考。';
-    return `<article class="stationary-reference"><div><span class="status-pill ${automatic?'warn':'good'}">${status}</span><strong>SN ${esc(c.device_id)}</strong><p>${sampleStamp(c.start)} — ${c.active?'至今（持续生效）':sampleStamp(c.end)} · 北京时间</p><p>中位数估计位置 ${number(c.profile.anchor.lon,7)}° E / ${number(c.profile.anchor.lat,7)}° N。${lifecycle}</p>${c.active&&state.canManage?`<div class="stationary-actions"><button class="button secondary" data-close-stationary="${esc(c.id)}">出发前关闭静止状态</button></div>`:''}</div><details><summary>查看参考和阈值 · v${q.version}</summary><p>从 ${c.profile.valid_population.toLocaleString()} 条非初始化有效定位采样中等间距取 ${c.profile.training_samples.toLocaleString()} 条训练；参考使用中位数、MAD 和噪声下限。阈值是工程判据，不是运输行业强制限值。</p><p>距锚点上限 ${number(c.profile.position_limit_m,2)} m；水平速度绝对值上限 ${number(c.profile.horizontal_limit_ms,3)} m/s${c.profile.position_std_limit_m?`；水平定位 σ 上限 ${number(c.profile.position_std_limit_m,1)} m`:''}。</p><div class="table-scroll"><table><thead><tr><th>通道</th><th>参考值</th><th>最大允许偏差</th></tr></thead><tbody>${Object.entries(c.profile.limits).filter(([k])=>!['speed','ve','vn'].includes(k)).map(([k,v])=>`<tr><td>${esc(k)} · ${esc(fieldUnits[k]||'')}</td><td>${number(k==='vu'?0:c.profile.centers[k],4)}</td><td>${number(v,4)}</td></tr>`).join('')}</tbody></table></div><p>重力与安装姿态基线保留；离群仅表示与静止参考不一致，是否为实际振动需复核原值。</p></details></article>`;
-  }).join('');
-  $('filterSummary').innerHTML=`<div class="quality-grid filter-counts">${cards.map(([label,value,note])=>`<section class="panel"><h3>${label}</h3><strong>${value.toLocaleString()}</strong><p>${note}</p></section>`).join('')}</div>${scopes||'<p class="scope-note">当前时段未设置静止事实。初始化、定向未就绪、静止或低速航迹角均保留；超 130 km/h 的失真导航解按字段隔离。</p>'}<p class="scope-note">状态提示不等同于被剔除字段；静止定位偏差只屏蔽经纬度，失真导航解隔离导航字段，IMU 与原始采样继续保留。${q.pending_samples?`${q.pending_samples} 条待判定，测量暂不展示。`:''}查看和导出采用页面上方已查询的设备及时间范围。</p>`;
+  const cards=[['原始采样',q.total,'原值保留，不物理删除'],['异常剔除采样',q.anomaly_samples,'只隔离失真速度或明显位置跳点'],['导航状态提示采样',q.status_samples||0,'初始化、未定向、低速航迹角均保留显示']];
+  const scopes=q.contexts.map(c=>`<article class="stationary-reference"><div><span class="status-pill good">历史静止记录（仅审计）</span><strong>SN ${esc(c.device_id)}</strong><p>${sampleStamp(c.start)} — ${c.active?'至今':sampleStamp(c.end)} · 北京时间</p><p>v5 已改用三轴峰值偏差判定；该旧静止上下文不再屏蔽运行或静止位置。</p></div></article>`).join('');
+  $('filterSummary').innerHTML=`<div class="quality-grid filter-counts">${cards.map(([label,value,note])=>`<section class="panel"><h3>${label}</h3><strong>${value.toLocaleString()}</strong><p>${note}</p></section>`).join('')}</div>${scopes||'<p class="scope-note">当前时段没有生效的静止上下文。三轴合成峰值偏差 ≤ 0.005 g 判为静止，> 0.005 g 判为运行；静止期间保留导航模式位置。</p>'}<p class="scope-note">状态提示不等同于被剔除字段；明显位置跳点只屏蔽经纬度，速度上限异常只隔离导航字段，IMU 与原始采样继续保留。${q.pending_samples?`${q.pending_samples} 条待判定，测量暂不展示。`:''}查看和导出采用页面上方已查询的设备及时间范围。</p>`;
   const select=$('qualityReason'),selected=select.value||'anomaly';
   select.innerHTML='<option value="anomaly">全部异常剔除（待复核）</option><option value="all">全部剔除字段</option>'+q.reasons.filter(r=>r.count&&r.category==='anomaly').map(r=>`<option value="${r.code}">${esc(r.label)} · ${r.count.toLocaleString()} 条</option>`).join('');
   select.value=selected;
@@ -707,7 +705,7 @@ function renderQuality(){
   const aggregate=h.aggregation||{},aggregateLevels=aggregate.levels||[];
   const aggregateDetail=aggregateLevels.map(level=>`${level.resolution_s===600?'10 分钟':level.resolution_s+' 秒'} ${level.buckets.toLocaleString()} 桶`).join(' + ');
   const cards=[['采集器心跳',h.ok?'运行正常':'需要检查',stamp(h.heartbeat)],['累计有效导航采样',(c.points||0).toLocaleString(),'仅校验通过且识别 SN 的 GPCHC(X)'],['长时查询聚合',(aggregate.raw_points||0).toLocaleString()+ ' 条',`${aggregateDetail||'等待建立聚合'} · ${aggregate.ready?'各层覆盖正常':'需要重建'}`],['有效 ASCII 报文',valid.toLocaleString(),'包括辅助定位报文；不表示全部字节已解码'],['被拒绝报文',rejected.toLocaleString(),'含坏校验、字段错误、无 SN 和时间无效'],['服务数据库',formatBytes(h.db_bytes),`可用磁盘 ${formatBytes(h.disk_free_bytes)}`],['待续读 / 尾部片段',formatBytes(h.pending_bytes),'包含未闭合帧，不等同于有效导航积压'],['服务器磁盘占用',number(h.disk?.used_pct,1)+'%',`达到 ${policy.trigger_pct}% 开始清理，目标 ${policy.target_pct}%`],['自动清理状态',retentionText,retention?`最近检查 ${stamp(retention.checked_at)} · 本次删除 ${retention.deleted_points||0} 条采样 / ${retention.files_completed||0} 个文件`:'等待服务器定时任务首次回执'],['最短保护期',policy.protect_hours+' 小时','同时保护当日目录、打开中的文件和未处理积压；设备配置与审计保留']];
-  $('qualityContent').innerHTML=`<div class="section-intro"><div><h2>采集与存储状态</h2><p>全局实时累计状态，不随设备或历史时间筛选变化。</p></div></div><div class="quality-grid">${cards.map(([k,v,n])=>`<section class="panel"><h3>${k}</h3><strong>${esc(v)}</strong><p>${esc(n)}</p></section>`).join('')}</div><section class="panel quality-details"><div class="panel-head"><h2>数据解释与处理边界</h2></div><table><tbody><tr><td>设备时间</td><td>GPS 周 + 周秒 → UTC → 北京时间；文件写入时间只能近似接收时间，不能据此宣称精确链路延迟。</td></tr><tr><td>位置与地图</td><td>采用高德国内道路底图；轨迹、事件和回放统一做 WGS84 → GCJ-02 显示转换。数据库、坐标读数及 CSV 保持原始 WGS84；显示转换不用于厘米级测量。无定位时不绘制坐标轨迹，但不再屏蔽其他参数；超过 3 秒缺测或疑似位置跳变时断开轨迹。</td></tr><tr><td>质量过滤</td><td>导航初始化、定向未就绪、静止或低速航迹角只作为状态提示，原值保留。确认静止段仅在定位偏差超过静止参考时屏蔽经纬度，其他速度、姿态、角速度、比力和质量参数继续展示。</td></tr><tr><td>惯导与姿态</td><td>航向北偏东为正；俯仰车头上扬为正；横滚右倾为正。加速度保留重力分量。安装未确认前不输出姿态业务预警。</td></tr><tr><td>原始混合流</td><td>已读取 ${formatBytes(c.read_bytes||0)}；${formatBytes(c.unparsed_bytes||0)} 为二进制、非标准帧或片段，原文件按容量策略留存。无 SN 的 GPCHC 不按 IP 猜测归属。</td></tr><tr><td>安全边界</td><td>SN 用作逻辑设备身份，当前公网 TCP 未提供密码鉴权，不等同于设备真实性认证；生产扩展建议专网/VPN或认证网关。</td></tr><tr><td>查询与留存</td><td>图表单次最多 31 天；6 小时至 2 天优先使用 60 秒聚合，2 天以上使用 10 分钟聚合，首尾仍读原始采样。聚合按设备、分辨率核验，未就绪时只对不超过 100 万条的范围安全回退。CSV 最多 10 万条，异常原值超过 100 万条需分段查看。每小时检查，磁盘达到 ${policy.trigger_pct}% 后按接收日期从旧到新清理原始文件、关联采样和各层聚合，目标 ${policy.target_pct}%；保护至少最近 ${policy.protect_hours} 小时。已删除数据不可恢复，需长期留档请提前导出或另行备份。</td></tr></tbody></table></section>`;
+  $('qualityContent').innerHTML=`<div class="section-intro"><div><h2>采集与存储状态</h2><p>全局实时累计状态，不随设备或历史时间筛选变化。</p></div></div><div class="quality-grid">${cards.map(([k,v,n])=>`<section class="panel"><h3>${k}</h3><strong>${esc(v)}</strong><p>${esc(n)}</p></section>`).join('')}</div><section class="panel quality-details"><div class="panel-head"><h2>数据解释与处理边界</h2></div><table><tbody><tr><td>设备时间</td><td>GPS 周 + 周秒 → UTC → 北京时间；文件写入时间只能近似接收时间，不能据此宣称精确链路延迟。</td></tr><tr><td>运动判定</td><td>只计算三轴合成峰值偏差 |√(ax²+ay²+az²)-1|：≤ 0.005 g 为静止，&gt; 0.005 g 为运行。导航模式、初始化、定向状态和速度不参与运动判定。</td></tr><tr><td>位置与地图</td><td>运行和静止期间均保留有效导航位置；仅对无法由相邻速度解释的明显单步跳变隔离经纬度并断线。数据库、坐标读数及 CSV 保持原始 WGS84；地图显示单独转换为 GCJ-02。</td></tr><tr><td>质量过滤</td><td>初始化、定向未就绪、静止或低速航迹角只作为状态提示，原值保留。超过 130 km/h 的导航解和明显位置漂移按字段隔离，原始采样可在数据质量页复核。</td></tr><tr><td>惯导与姿态</td><td>航向北偏东为正；俯仰车头上扬为正；横滚右倾为正。加速度保留重力分量。安装未确认前不输出姿态业务预警。</td></tr><tr><td>原始混合流</td><td>已读取 ${formatBytes(c.read_bytes||0)}；${formatBytes(c.unparsed_bytes||0)} 为二进制、非标准帧或片段，原文件按容量策略留存。无 SN 的 GPCHC 不按 IP 猜测归属。</td></tr><tr><td>安全边界</td><td>SN 用作逻辑设备身份，当前公网 TCP 未提供密码鉴权，不等同于设备真实性认证；生产扩展建议专网/VPN或认证网关。</td></tr><tr><td>查询与留存</td><td>图表单次最多 31 天；曲线按筛选时间桶绘制，6 小时至 2 天优先使用 60 秒聚合，2 天以上使用 10 分钟聚合，首尾仍读原始采样。聚合按设备、分辨率核验，未就绪时只对不超过 100 万条的范围安全回退。CSV 最多 10 万条，异常原值超过 100 万条需分段查看。每小时检查，磁盘达到 ${policy.trigger_pct}% 后按接收日期从旧到新清理原始文件、关联采样和各层聚合，目标 ${policy.target_pct}%；保护至少最近 ${policy.protect_hours} 小时。已删除数据不可恢复，需长期留档请提前导出或另行备份。</td></tr></tbody></table></section>`;
   if(retentionStale){error('未收到最近 90 分钟内的存储检查回执，请管理员检查服务器定时任务。');}
   else if(retention.warning){error('存储清理：'+retention.warning);}
   else if(h.disk_free_bytes<5*1073741824){error('服务器可用空间低于 5 GB；自动清理仅限符合条件的旧车载数据，请同时安排容量检查。');}

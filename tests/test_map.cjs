@@ -108,14 +108,14 @@ test('actual application converts routes, endpoints, events, playback, chart and
   calls.charts.get('click')({seriesType:'line',value:[101000,0]});near(calls.pans.at(-1),CTMCMap.latLng(track[1]));
   await mapTest.locateEvent(1);near(calls.centers.at(-1),CTMCMap.latLng(point));near(calls.moves.at(-1),CTMCMap.latLng(point));
   assert.equal(JSON.stringify(track),original);
-  // Known-static data uses an explicitly labelled estimate, never a drift route.
-  const anchor={lat:31.2456,lon:121.616},staticTrack=track.map(p=>({...p,stationary_context:'static-1',speed:null}));
-  mapTest.setData({...data,track:staticTrack,quality:{contexts:[{id:'static-1',start:100,end:null,active:true,profile:{anchor}}]}});
+  // v5 keeps measured positions in both static and running periods.
+  const anchor={lat:31.2456,lon:121.616},staticTrack=track.map(p=>({...p,motion_state:'stationary',speed:null}));
+  mapTest.setData({...data,track:staticTrack,quality:{contexts:[]}});
   mapTest.renderMap();
-  assert.equal(calls.lines.length,1,'static samples must not create another polyline');
-  mapTest.selectTime(120);near(calls.moves.at(-1),CTMCMap.latLng(anchor));
+  assert.equal(calls.lines.length,2,'static samples remain in the measured route');
+  mapTest.selectTime(120);near(calls.moves.at(-1),CTMCMap.latLng(staticTrack[2]));
   assert.match(node('coordinateReadout').textContent,/— km\/h/,'null speed must not be shown as zero');
-  assert.match(node('stationaryMapNote').textContent,/不是实测真值/);
+  assert.match(node('stationaryMapNote').textContent,/保留运行与静止期间/);
   assert.equal(node('stationaryMapNote').hidden,false);
   // Returning to real motion restores measured coordinates, without a sticky anchor.
   mapTest.setData(data);mapTest.renderMap();mapTest.selectTime(101);
@@ -183,7 +183,7 @@ test('overview and inertial curves draw dashed alarm thresholds for direct chann
   const speed=h.calls.options.get('speedChart'),speedLine=speed.series.find(s=>s.name==='车辆速度');
   assert.equal(speedLine.markLine.lineStyle.type,'dashed');assert.equal(speedLine.markLine.data[0].yAxis,80);
   const overviewVibration=h.calls.options.get('overviewVibrationTimeChart');
-  assert.equal(overviewVibration.series[1].markLine.lineStyle.type,'dashed');assert.equal(overviewVibration.series[1].markLine.data[0].yAxis,.8);
+  assert.equal(overviewVibration.series[1].markLine.lineStyle.type,'dashed');assert.deepEqual(Array.from(overviewVibration.series[1].markLine.data,map=>map.yAxis),[.005,.8]);
   h.app.setView('signals');
   const pitch=h.calls.options.get('signal-0').series.find(s=>s.name==='俯仰');
   assert.deepEqual(Array.from(pitch.markLine.data,map=>map.yAxis),[12,-12]);
@@ -213,29 +213,21 @@ test('inertial analysis separates signed acceleration and three-axis shock decis
   assert.deepEqual(Array.from(acceleration.series[1].data.map(row=>row[1])),[4,-3.5]);
   assert.match(h.node('signalAccelerationNote').textContent,/2 个速度变化率点/);assert.match(h.node('signalAccelerationNote').textContent,/2 项事件峰值/);
   const shock=h.calls.options.get('signalShockChart'),shockLine=shock.series[0];
-  assert.deepEqual(Array.from(shockLine.data.map(row=>row[1])),[.4,.85]);assert.equal(shockLine.markLine.data[0].yAxis,.8);assert.equal(shock.series[1].data[0][1],.9);
-  assert.match(h.node('signalShockNote').textContent,/0\.80 g 参考线/);assert.match(h.node('signalShockNote').textContent,/2 个三轴合成峰值偏差时间桶/);
+  assert.deepEqual(Array.from(shockLine.data.map(row=>row[1])),[.4,.85]);assert.deepEqual(Array.from(shockLine.markLine.data,map=>map.yAxis),[.005,.8]);assert.equal(shock.series[1].data[0][1],.9);
+  assert.match(h.node('signalShockNote').textContent,/0\.80 g/);assert.match(h.node('signalShockNote').textContent,/2 个三轴合成峰值偏差时间桶/);
 });
 
-test('quality page explains conservative automatic exit and keeps manual close admin-only',async()=>{
+test('quality page labels legacy stationary records as audit-only',async()=>{
   const h=await appHarness(),anchor={lat:31.2456,lon:121.616};
   h.app.state.canManage=true;
-  h.app.setData({quality:{version:2,total:100,anomaly_samples:2,unavailable_samples:3,pending_samples:0,reasons:[],contexts:[{
+  h.app.setData({quality:{version:5,total:100,anomaly_samples:2,unavailable_samples:3,pending_samples:0,reasons:[],contexts:[{
     id:'active-1',device_id:'SN1',start:100,end:null,active:true,profile:{anchor,valid_population:100,training_samples:100,position_limit_m:15,horizontal_limit_ms:.3,position_std_limit_m:5,limits:{alt:15},centers:{alt:10}},
     auto_exit_policy:{max_position_std_m:1,min_speed_ms:.15,min_anchor_distance_m:30,min_duration_s:15,min_displacement_m:8,min_path_efficiency:.5,
       vehicle_motion:{max_position_std_m:5,min_speed_ms:1,min_duration_s:10,min_displacement_m:25,min_path_efficiency:.65}}
   }]}});
   h.app.renderFilterSummary();
-  assert.match(h.node('filterSummary').innerHTML,/持续静止 · 自动防护/);
-  assert.match(h.node('filterSummary').innerHTML,/低速小推车路径要求组合导航/);
-  assert.match(h.node('filterSummary').innerHTML,/车辆路径允许卫导或组合导航/);
-  assert.match(h.node('filterSummary').innerHTML,/0\.15 m\/s/);
-  assert.match(h.node('filterSummary').innerHTML,/1\.0 m\/s/);
-  assert.match(h.node('filterSummary').innerHTML,/轨迹有效率 ≥ 65%/);
-  assert.match(h.node('filterSummary').innerHTML,/速度积分与坐标位移一致/);
-  assert.match(h.node('filterSummary').innerHTML,/出发前关闭静止状态/);
-  h.app.state.canManage=false;h.app.renderFilterSummary();
-  assert.doesNotMatch(h.node('filterSummary').innerHTML,/出发前关闭静止状态/);
+  assert.match(h.node('filterSummary').innerHTML,/历史静止记录（仅审计）/);
+  assert.match(h.node('filterSummary').innerHTML,/v5 已改用三轴峰值偏差判定/);
 });
 
 test('quality page distinguishes historical replay from user-confirmed stationary facts',async()=>{
@@ -246,9 +238,8 @@ test('quality page distinguishes historical replay from user-confirmed stationar
     profile:{anchor,valid_population:100,training_samples:100,position_limit_m:15,horizontal_limit_ms:.3,position_std_limit_m:5,limits:{alt:15},centers:{alt:10}}
   }]}});
   h.app.renderFilterSummary();
-  assert.match(h.node('filterSummary').innerHTML,/历史算法回放静止/);
-  assert.match(h.node('filterSummary').innerHTML,/非用户手工确认|全量回放得到/);
-  assert.doesNotMatch(h.node('filterSummary').innerHTML,/用户确认静止/);
+  assert.match(h.node('filterSummary').innerHTML,/历史静止记录（仅审计）/);
+  assert.match(h.node('filterSummary').innerHTML,/旧静止上下文不再屏蔽/);
 });
 
 const settle=()=>new Promise(resolve=>setImmediate(resolve));

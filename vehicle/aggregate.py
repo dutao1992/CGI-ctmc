@@ -18,12 +18,12 @@ METRICS = ['speed','heading','pitch','roll','gx','gy','gz','ax','ay','az','ve','
            've_std','vn_std','vu_std','course','course_std']
 ROLLUP_SECONDS = 60
 ROLLUP_LEVELS = (60,600)
-# Bump when the payload shape changes; the deployment preflight rebuilds both
-# levels before serving queries so every bucket carries vibration statistics.
-ROLLUP_VERSION = quality.VERSION * 100 + 3
+# Bump when the payload shape or motion-state semantics change; deployment
+# rebuilds both levels before serving queries.
+ROLLUP_VERSION = quality.VERSION * 100 + 4
 TRACK_LIMIT = 20000
 ENDPOINT_FIELDS = list(dict.fromkeys(
-    ['t','lat','lon','speed','heading','fix_mode','nav_mode','valid_pos','stationary_context','lat_std','lon_std'] + METRICS
+    ['t','lat','lon','speed','heading','fix_mode','nav_mode','valid_pos','stationary_context','motion_state','lat_std','lon_std'] + METRICS
 ))
 
 
@@ -38,35 +38,30 @@ def _endpoint(p):
 def _transition(prev, current):
     delta = current['t'] - prev['t'] if prev else 0
     contiguous = bool(prev and 0 < delta <= 3)
-    jump = bool(contiguous and not prev.get('stationary_context') and not current.get('stationary_context') and
-                prev.get('valid_pos') and current.get('valid_pos') and
-                distance(prev,current) > (max(prev.get('speed') or 0,current.get('speed') or 0)+15)*delta +
-                max(20,5*(current.get('lat_std') or 0),5*(current.get('lon_std') or 0)))
+    jump = bool(contiguous and prev.get('valid_pos') and current.get('valid_pos') and
+                quality.navigation_position_drift(prev, current))
     covered = delta if contiguous and prev.get('valid_pos') and current.get('valid_pos') and not jump else 0
     mileage = moving = 0
-    speed_ok = current.get('speed') is not None
-    if covered and not current.get('stationary_context') and not prev.get('stationary_context') and speed_ok and prev.get('speed') is not None and current['speed'] >= 1 and prev['speed'] >= 1:
-        mileage = (current['speed']+prev['speed'])/2*delta
+    prev_state = _motion_state(prev) if prev else 'unknown'
+    current_state = _motion_state(current)
+    if contiguous and prev_state == 'moving' and current_state == 'moving':
         moving = delta
+    if covered and prev_state == 'moving' and current_state == 'moving' and current.get('speed') is not None and prev.get('speed') is not None:
+        mileage = (current['speed']+prev['speed'])/2*delta
     return dict(delta=delta,contiguous=contiguous,jump=jump,covered=covered,mileage=mileage,moving=moving,
                 gap=bool(prev and delta > 3))
 
 
 def _motion_state(p):
-    if p.get('stationary_context'):
-        return 'confirmed_stationary'
-    speed_ok = p.get('speed') is not None
-    if p.get('valid_pos') and speed_ok:
-        return 'moving' if p['speed'] >= 1 else 'stopped'
-    return 'unknown'
+    state = p.get('motion_state')
+    if state in ('moving', 'stationary', 'unknown'):
+        return state
+    return quality.motion_state(p)
 
 
 def _specific_force_magnitude(p):
     """Return the gravity-included three-axis specific-force magnitude."""
-    values = [p.get(key) for key in ('ax', 'ay', 'az')]
-    if not all(isinstance(value, (int, float)) and math.isfinite(value) for value in values):
-        return None
-    return math.sqrt(sum(value * value for value in values))
+    return quality.tri_axis_resultant(p)
 
 
 def _vibration_stats(points):
@@ -114,10 +109,10 @@ class RollupBuilder:
         self.fixed += int(p['fix_mode'] in (4,8))
         self.valid += int(bool(p['valid_pos']))
         self.fix_counts[str(p['fix_mode'])] += 1
-        # "最高有效速度" excludes confirmed stationary residuals and invalid
+        # Highest effective speed excludes stationary samples and invalid
         # navigation solutions; the raw speed channel remains available in the
-        # series/evidence view unless the v4 physical-limit rule quarantines it.
-        if p['speed'] is not None and p['valid_pos'] and not p.get('stationary_context'):
+        # evidence view unless the physical-limit rule quarantines it.
+        if p['speed'] is not None and p['valid_pos'] and _motion_state(p) != 'stationary':
             self.max_speed = max(self.max_speed or 0,p['speed']*3.6)
         for metric in METRICS:
             value = p[metric]
@@ -156,7 +151,7 @@ class RollupBuilder:
         self.current['distance_m'] += transition['mileage']
 
         if p['valid_pos']:
-            pt = {key:p.get(key) for key in ['t','lat','lon','speed','heading','fix_mode','nav_mode','stationary_context']}
+            pt = {key:p.get(key) for key in ['t','lat','lon','speed','heading','fix_mode','nav_mode','stationary_context','motion_state']}
             pt['break_before'] = self.route_break
             if self.route_break or not self.track:
                 self.track.append(pt)
@@ -210,7 +205,8 @@ class QueryCombiner:
         key = self._key((snap['first']['t']+snap['last']['t'])/2)
         group = self.groups.setdefault(key,{'t':snap['first']['t'],
                                             'values':{k:[None,None,0.0,0,None] for k in METRICS},
-                                            'vibration':self._empty_vibration_stats()})
+                                            'vibration':self._empty_vibration_stats(),
+                                            'state_counts':collections.Counter()})
         group['t'] = min(group['t'],snap['first']['t'])
         for metric, source in snap['metrics'].items():
             target = group['values'][metric]
@@ -230,6 +226,13 @@ class QueryCombiner:
             target_vibration[2] += total
             target_vibration[3] += squares
             target_vibration[4] += count
+        for part in snap.get('segments', ()):
+            state = part.get('state', 'unknown')
+            duration = max(0.0, float(part.get('end', 0)) - float(part.get('start', 0)))
+            # A one-sample segment still contributes a small, deterministic
+            # vote; longer intervals dominate isolated sensor noise in the
+            # display bucket without changing the raw per-sample decision.
+            group['state_counts'][state] += max(duration, 0.1)
 
     def _merge_segments(self, snap, transition):
         parts = [dict(part) for part in snap['segments']]
@@ -324,10 +327,12 @@ class QueryCombiner:
         return dict(version=quality.VERSION,total=self.count,excluded_samples=excluded,anomaly_samples=anomalies,
                     unavailable_samples=unavailable,status_samples=status,pending_samples=pending,excluded_fields=dict(field_counts),
                     reasons=[dict(code=k,label=label,category=kind,count=reason_counts[k]) for k,(label,kind) in quality.REASONS.items()],
-                    contexts=scopes,policy='状态提示不屏蔽参数；超过 130 km/h 的失真导航解及确认静止段定位偏差按字段隔离；原始值保留，空缺不补零、不插值')
+                    contexts=scopes,
+                    policy=f'运动/静止仅按三轴合成峰值偏差 |√(ax²+ay²+az²)-1|：≤ {quality.MOTION_IMPACT_THRESHOLD_G:.3f} g 为静止，> {quality.MOTION_IMPACT_THRESHOLD_G:.3f} g 为运行；导航初始化、定向未就绪、静止或低速航迹角只提示不剔除。仅隔离超过 {quality.MAX_VALID_VEHICLE_SPEED_KMH:.0f} km/h 的失真导航解和明显位置跳点，原始值保留')
 
     def finish(self, contexts, source, source_resolution_s, elapsed_ms):
         series = {key:[] for key in METRICS}
+        motion_states = []
         vibration_series = []
         vibration_samples = 0
         vibration_sum = 0.0
@@ -339,12 +344,21 @@ class QueryCombiner:
             for metric,(lo,hi,total,n,last) in group['values'].items():
                 mean = last if metric in ('heading','course') else total/n if n else None
                 series[metric].append([group['t']*1000,mean,lo,hi])
+            state_counts = group.get('state_counts') or {}
+            if state_counts:
+                state = max(state_counts, key=lambda value: (state_counts[value], value == 'moving'))
+            else:
+                state = 'unknown'
             lo,hi,total,squares,count = group.get('vibration',self._empty_vibration_stats())
             if count:
                 mean = total / count
                 variance = max(0.0, squares / count - mean * mean)
                 rms = math.sqrt(variance)
-                peak = max(abs(lo - mean), abs(hi - mean))
+                # The decision signal is absolute deviation from the 1 g
+                # gravity resultant, not deviation from a moving bucket mean.
+                peak = max(abs(lo - 1.0), abs(hi - 1.0))
+                if not state_counts:
+                    state = 'moving' if peak > quality.MOTION_IMPACT_THRESHOLD_G else 'stationary'
                 vibration_series.append([
                     round(group['t'] * 1000), round(rms, 7), round(peak, 7),
                     round(mean, 7), round(lo, 7), round(hi, 7), count,
@@ -355,6 +369,9 @@ class QueryCombiner:
                 vibration_peak = peak if vibration_peak is None else max(vibration_peak, peak)
                 span = hi - lo
                 vibration_peak_to_peak = span if vibration_peak_to_peak is None else max(vibration_peak_to_peak, span)
+                motion_states.append([round(group['t'] * 1000), state, round(peak, 7)])
+            elif state_counts:
+                motion_states.append([round(group['t'] * 1000), state, None])
         def bounded_track(points):
             if len(points) <= TRACK_LIMIT:
                 selected = points
@@ -392,7 +409,7 @@ class QueryCombiner:
         )
         return dict(device_id=self.device_id,start=self.start,end=self.end,total=self.count,track=track,
                     gaps=self.gaps[:2000],track_truncated=self.track_truncated or len(self.track)>TRACK_LIMIT,
-                    series=series,quality=self.quality_summary(contexts),segments=segments[:1000],
+                    series=series,motion_states=motion_states,quality=self.quality_summary(contexts),segments=segments[:1000],
                     vibration_range=vibration_range,
             summary=dict(first_t=self.first,last_t=self.last,distance_km=self.mileage/1000,moving_s=self.moving,
                          covered_s=self.covered,max_kmh=self.max_speed,fixed_pct=100*self.fixed/self.count if self.count else 0,
@@ -402,7 +419,7 @@ class QueryCombiner:
                     aggregation=dict(buckets=len(self.groups),bucket_s=(self.end-self.start)/self.bins,
                                      source=source,source_resolution_s=source_resolution_s,query_ms=round(elapsed_ms,1),cache_hit=False,
                                      track_points=len(track),track_limit=TRACK_LIMIT,track_truncated=self.track_truncated or len(self.track)>TRACK_LIMIT,
-                                     method='先按 v4 规则隔离超过车辆物理上限的失真导航解及确认静止段定位偏差，再计算等时桶均值/最小/最大；不插值；长窗口分层读取可重建的 60 秒或 10 分钟聚合，首尾读取原始采样；状态提示不屏蔽参数，剔除原值见数据质量',
+                    method='先按 v5 三轴合成峰值偏差（|√(ax²+ay²+az²)-1| > 0.005 g）判定运动/静止，再隔离超过车辆物理上限或明显跳点的导航字段；不插值；长窗口分层读取可重建的 60 秒或 10 分钟聚合，首尾读取原始采样',
                                      timezone='Asia/Shanghai',coordinates='WGS84 原始坐标；前端高德底图单独转换为 GCJ-02 展示',
                                      mileage='有效定位且连续速度≥3.6 km/h 时的速度梯形积分；缺测不外推，非 CAN 里程'))
 
