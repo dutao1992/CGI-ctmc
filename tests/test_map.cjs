@@ -169,7 +169,8 @@ test('overview vibration uses the selected range, links the speed axis and keeps
   assert.match(h.node('overviewVibrationNote').textContent,/动态 RMS 最大的连续 60 秒窗/);assert.deepEqual(h.calls.connections,['overview-speed-vibration']);
   h.app.setView('signals');
   assert.equal(h.calls.options.has('signalVibrationTimeChart'),false);assert.equal(h.calls.options.has('signalVibrationSpectrumChart'),false);
-  assert.match(h.node('signal-note-0').textContent,/机体相对水平和北向的转角/);
+  assert.match(h.node('signal-note-0').textContent,/机体相对水平的俯仰和横滚转角/);
+  assert.doesNotMatch(h.calls.options.get('signal-0').legend.data.join('、'),/航向/);
   h.respond(async params=>queryFixture(params,0));await h.clickRange(900);
   assert.match(h.node('overviewVibrationState').textContent,/暂无可分析/);
   assert.match(h.calls.options.get('overviewVibrationTimeChart').graphic[0].style.text,/所选时段无采样/);

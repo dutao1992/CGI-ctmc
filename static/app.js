@@ -485,7 +485,7 @@ function renderDecisionCurves(){
   $('signalShockNote').textContent=state.data.total?`${shockRows.toLocaleString()} 个三轴合成峰值偏差时间桶，${shockEvents.toLocaleString()} 项冲击事件峰值已标记。虚线为 ${number(SHOCK_REFERENCE_G,2)} g 参考线；不对缺测或静止隔离值补零。`:'所选时段无采样，无法生成三轴冲击判定曲线。';
 }
 const chartGroups=[
- ['姿态角','°',[['heading','航向','°'],['pitch','俯仰','°'],['roll','横滚','°']],'机体相对水平和北向的转角。'],
+ ['姿态角','°',[['pitch','俯仰','°'],['roll','横滚','°']],'机体相对水平的俯仰和横滚转角。'],
  ['三轴角速度','°/s',[['gx','X 轴','°/s'],['gy','Y 轴','°/s'],['gz','Z 轴','°/s']],'绕三个安装轴的转动速率。'],
  ['三轴加速度 / 比力','g · 含重力',[['ax','X 轴','g'],['ay','Y 轴','g'],['az','Z 轴','g']],'三轴比力，含重力分量；静止时合成值约为 1 g。'],
  ['东 / 北 / 天向速度','m/s',[['ve','东向','m/s'],['vn','北向','m/s'],['vu','天向','m/s']],'相对地面的东、北、天向速度分量。'],
