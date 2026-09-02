@@ -6,7 +6,7 @@
   <link rel="stylesheet" href="./vendor/leaflet.css?v=a78371028241"><link rel="stylesheet" href="./style.css?v=a919dc3f9191">
   <script defer src="./vendor/leaflet.js?v=db49d009c841"></script><script defer src="./vendor/echarts.min.js?v=b66b25aeb4df"></script><script defer src="./vendor/coordtransform.js?v=e941a1a5825c"></script>
   <script defer src="./map.js?v=5e1771241c19"></script>
-  <script defer src="./app.js?v=2c4d7a12b3dd"></script>
+  <script defer src="./app.js?v=0eab9954a2df"></script>
 </head>
 <body>
 <aside class="rail">
@@ -54,7 +54,7 @@
       </section>
       <section class="panel snapshot-panel"><div class="panel-head"><div><p class="eyebrow">LIVE / DEVICE SNAPSHOT</p><h2>设备最新状态</h2></div><span id="deviceOnline" class="status-pill">--</span></div><div id="deviceSnapshot"></div><div class="mini-compass"><div class="compass-grid"><span class="north">N</span><span class="east">E</span><span class="south">S</span><span class="west">W</span><div id="headingNeedle" class="needle">▲</div></div><div><small>航向角</small><strong id="headingValue">--<em>°</em></strong><span id="headingNote">请先完成惯导初始化</span></div></div><div id="warningSummary" class="warning-summary"></div></section>
     </div>
-    <section class="panel speed-panel"><div class="panel-head"><div><p class="eyebrow">03 / MOTION PROFILE</p><h2>速度剖面 <span class="h2-unit">km/h · 浅黄色区间为缺测</span> <span class="threshold-key"><i aria-hidden="true"></i>虚线：报警阈值</span></h2><p class="chart-sync-note">与下方振动曲线共用筛选时间轴；悬停竖线同步读取速度与振动。</p></div><button class="text-button" data-goto="signals">全部惯导信号 ↗</button></div><div class="chart speed-chart" id="speedChart"></div></section>
+    <section class="panel speed-panel"><div class="panel-head"><div><p class="eyebrow">03 / MOTION PROFILE</p><h2>速度剖面 <span class="h2-unit">km/h · 浅黄色区间为缺测</span> <span class="threshold-key"><i aria-hidden="true"></i>橙色虚线：报警阈值</span></h2><p class="chart-sync-note">实线保留最小/最大速度，虚线显示均值。与下方振动曲线共用筛选时间轴；悬停读取速度范围与振动。</p></div><button class="text-button" data-goto="signals">全部惯导信号 ↗</button></div><div class="chart speed-chart" id="speedChart"></div></section>
     <section class="panel vibration-panel vibration-overview vibration-range" aria-labelledby="overviewVibrationTitle">
       <div class="vibration-head"><div><p class="eyebrow">04 / VIBRATION RANGE</p><h2 id="overviewVibrationTitle">筛选时段振动曲线 <span class="h2-unit">10 Hz 输入 · 分层聚合</span></h2><p>覆盖当前筛选时间；曲线按等时桶给出动态 RMS、峰值偏差和样本数，悬停可读取具体值。</p></div><span id="overviewVibrationState" class="status-pill">等待采样</span></div>
       <div class="vibration-metrics" id="overviewVibrationMetrics" aria-live="polite"></div>
@@ -63,7 +63,7 @@
     </section>
     <div class="bottom-grid"><section class="panel"><div class="panel-head"><div><p class="eyebrow">OPERATIONS</p><h2>行程与停留</h2></div><span class="muted">连续 ≥30 秒的区段</span></div><div id="segments"></div></section><section class="panel"><div class="panel-head"><div><p class="eyebrow">ATTENTION</p><h2>需要关注</h2></div><button class="text-button" data-goto="events">全部事件 ↗</button></div><div id="eventPreview"></div></section></div>
   </section>
-  <section id="signalsView" class="view" hidden><div class="section-intro"><div><h2>惯导信号工作台</h2><p>按字段口径聚合展示速度、姿态、比力、位置质量与导航状态；初始化、未定向和低速航迹角原值保留，以状态提示说明可用性；缺测仍不补零、不插值。<span class="threshold-key"><i aria-hidden="true"></i>虚线为当前报警阈值</span>。</p></div><span id="aggregationLabel" class="status-pill"></span></div>
+  <section id="signalsView" class="view" hidden><div class="section-intro"><div><h2>惯导信号工作台</h2><p>按字段口径聚合展示速度、姿态、比力、位置质量与导航状态；初始化、未定向和低速航迹角原值保留，以状态提示说明可用性；缺测仍不补零、不插值。<span class="threshold-key"><i aria-hidden="true"></i>橙色虚线为当前报警阈值</span>。</p></div><span id="aggregationLabel" class="status-pill"></span></div>
     <section class="panel decision-curves-panel" aria-labelledby="signalDecisionTitle">
       <div class="panel-head decision-curves-head"><div><p class="eyebrow">05 / DERIVED DECISION</p><h2 id="signalDecisionTitle">工况判定曲线 <span class="h2-unit">当前筛选 · 独立判定</span></h2><p>急加减速与三轴冲击拆分显示；虚线为判定参考线，事件峰值保留在曲线上。</p></div><span class="status-pill">独立判定</span></div>
       <div class="decision-chart-grid"><section><div class="vibration-chart-label"><b>急加减速判定</b><span>速度变化率 · m/s² · 正加速 / 负减速</span></div><div class="chart decision-chart" id="signalAccelerationChart" aria-label="急加减速判定曲线"></div><p class="signal-data-note" id="signalAccelerationNote"></p></section><section><div class="vibration-chart-label"><b>三轴冲击判定</b><span>合成比力峰值偏差 · g</span></div><div class="chart decision-chart" id="signalShockChart" aria-label="三轴冲击判定曲线"></div><p class="signal-data-note" id="signalShockNote"></p></section></div>
@@ -99,7 +99,7 @@
         <section class="panel map-panel"><div class="panel-head"><div><p class="eyebrow">TRACE RECONSTRUCTION</p><h2>离线运行轨迹</h2></div><button class="text-button" id="offlineFitMap">适配轨迹 ↗</button></div><div id="offlineMap" aria-label="离线设备运行轨迹地图"></div><div id="offlineTileNotice" class="tile-notice" hidden>部分高德底图未能加载，轨迹与 WGS84 坐标分析不受影响。</div><div class="map-footer"><span id="offlineCoordinateReadout">选择文件后生成轨迹</span><span>高德 GCJ-02 · 分析坐标 WGS84</span></div></section>
         <section class="panel offline-facts"><div class="panel-head"><div><p class="eyebrow">FILE MANIFEST</p><h2>分析清单</h2></div></div><div id="offlineFacts"></div></section>
       </div>
-      <section class="panel speed-panel"><div class="panel-head"><div><p class="eyebrow">MOTION PROFILE</p><h2>离线速度剖面 <span class="h2-unit">km/h</span></h2></div><span class="muted">浅线保留桶内最小 / 最大值</span></div><div class="chart speed-chart" id="offlineSpeedChart"></div></section>
+      <section class="panel speed-panel"><div class="panel-head"><div><p class="eyebrow">MOTION PROFILE</p><h2>离线速度剖面 <span class="h2-unit">km/h</span></h2></div><span class="muted">实线：最小 / 最大值 · 虚线：均值</span></div><div class="chart speed-chart" id="offlineSpeedChart"></div></section>
       <div class="bottom-grid offline-bottom"><section class="panel"><div class="panel-head"><div><p class="eyebrow">TRIP SEGMENTS</p><h2>行程与停留</h2></div><span class="muted">连续 ≥30 秒</span></div><div id="offlineSegments"></div></section><section class="panel"><div class="panel-head"><div><p class="eyebrow">RULE REPLAY</p><h2>异常告警候选</h2></div><span id="offlineEventCount" class="status-pill"></span></div><div id="offlineEvents"></div></section></div>
       <div class="section-intro offline-signal-title"><div><h2>离线惯导信号工作台</h2><p>与在线图表使用相同的时间桶和有效值口径，完整展示均值及峰值包络。</p></div><span id="offlineAggregationLabel" class="status-pill"></span></div>
       <div class="signal-grid" id="offlineSignalCharts"></div>

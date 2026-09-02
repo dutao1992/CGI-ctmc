@@ -164,7 +164,7 @@ test('overview vibration uses the selected range, links the speed axis and keeps
   const signalTooltip=time.tooltip.formatter([{value:[h.app.state.data.start*1000,.011],dataIndex:0}]);
   assert.match(signalTooltip,/车辆速度：/);assert.match(signalTooltip,/振动 RMS：/);assert.match(signalTooltip,/振动峰值偏差：/);assert.match(signalTooltip,/振动有效值：3 点/);
   const speedTooltip=speed.tooltip.formatter([{value:[h.app.state.data.start*1000,.1],dataIndex:0}]);
-  assert.match(speedTooltip,/车辆速度：/);assert.match(speedTooltip,/振动 RMS：/);assert.equal(speed.xAxis.min,time.xAxis.min);assert.equal(speed.xAxis.max,time.xAxis.max);
+  assert.equal(speed.tooltip.renderMode,'html');assert.equal(speed.tooltip.confine,true);assert.match(speedTooltip,/车辆速度：/);assert.match(speedTooltip,/振动 RMS：/);assert.equal(speed.xAxis.min,time.xAxis.min);assert.equal(speed.xAxis.max,time.xAxis.max);
   assert.deepEqual(spectrum.series[0].data,[[1,.01],[2,.03]]);assert.equal(spectrum.xAxis.max,4);
   assert.match(h.node('overviewVibrationNote').textContent,/动态 RMS 最大的连续 60 秒窗/);assert.deepEqual(h.calls.connections,['overview-speed-vibration']);
   h.app.setView('signals');

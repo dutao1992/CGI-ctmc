@@ -18,6 +18,7 @@ const rules = {
 };
 const views = {overview:['每一段轨迹，都有数据可循','从运行轨迹到惯导信号，连续观察运输过程中的状态与变化。'],signals:['看见变化，定位原因','速度、姿态、比力与角速度，在同一条时间轴上对照。'],events:['异常有据，处置有痕','区分导航质量、设备告警与业务预警，保留现场采样证据。'],fleet:['从一台设备，到整个车队','独立设备档案与规则，为后续多 CGI 模块接入保留清晰边界。'],quality:['知道数据来自哪里，也知道它的边界','接收、校验、定位和分析，分别给出可核查的状态。'],offline:['让一份离线记录，重新成为完整行程','上传有效数据 CSV 或 CSV.GZ，在不进入实时数据库的前提下重建轨迹、事件与惯导工况。']};
 const colors = ['#397c63','#c38a42','#729dc1'];
+const PARAMETER_CURVE_NOTE = '实线显示桶内最小/最大值，虚线显示均值；航向/航迹角实线为桶内末值。极值位于对应时间桶内，精确时刻需缩短筛选查看。';
 const VIBRATION_VIEW_MODE = 'range';
 const SHOCK_REFERENCE_G = 0.8;
 const MOTION_THRESHOLD_G = 0.005;
@@ -335,10 +336,11 @@ function nearestChartRow(rows,timestamp){
 }
 function overviewTooltip(timestamp,speedRow,vibrationRow){
   const speed=Number.isFinite(Number(speedRow?.[1]))?`${number(Number(speedRow[1])*3.6,2)} km/h`:'—';
+  const speedRange=Number.isFinite(speedRow?.[2])&&Number.isFinite(speedRow?.[3])?`${number(speedRow[2]*3.6,2)} – ${number(speedRow[3]*3.6,2)} km/h`:'—';
   const rms=Number.isFinite(Number(vibrationRow?.[1]))?`${number(Number(vibrationRow[1]),5)} g`:'—';
   const peak=Number.isFinite(Number(vibrationRow?.[2]))?`${number(Number(vibrationRow[2]),5)} g`:'—';
   const count=Number.isFinite(Number(vibrationRow?.[6]))?`${number(Number(vibrationRow[6]),0)} 点`:'—';
-  return `${chartClock(timestamp).replace(/\n/g,' ')}<br/>车辆速度：${speed}<br/>振动 RMS：${rms}<br/>振动峰值偏差：${peak}<br/>振动有效值：${count}`;
+  return `${chartClock(timestamp).replace(/\n/g,' ')}<br/>车辆速度：${speed}（均值）<br/>桶内速度范围：${speedRange}<br/>振动 RMS：${rms}<br/>振动峰值偏差：${peak}<br/>振动有效值：${count}`;
 }
 function overviewTimeTooltip(params){
   const list=Array.isArray(params)?params:[params],first=list[0],timestamp=Number(first?.value?.[0]??first?.data?.[0]);
@@ -356,8 +358,8 @@ function buildChart(id,metrics,options={}){
   const series=[];
   metrics.forEach(([key,label,unit,multiplier=1],i)=>{
     const alarmLines=chartAlarmLines(key,multiplier,options);
-    if(!['heading','course'].includes(key))for(const index of [2,3])series.push({name:label+(index===2?' · 最小':' · 最大'),type:'line',data:chartData(key,multiplier,index),showSymbol:false,progressive:2000,progressiveThreshold:3000,lineStyle:{width:1,opacity:.3},itemStyle:{color:colors[i%3]},connectNulls:false,emphasis:{disabled:true},silent:true});
-    series.push({name:label,type:'line',data:chartData(key,multiplier,1),showSymbol:false,progressive:2000,progressiveThreshold:3000,lineStyle:{width:1.7},itemStyle:{color:colors[i%3]},connectNulls:false,
+    if(!['heading','course'].includes(key))for(const index of [2,3])series.push({name:label+(index===2?' · 最小':' · 最大'),type:'line',data:chartData(key,multiplier,index),showSymbol:false,progressive:2000,progressiveThreshold:3000,lineStyle:{width:1.4,opacity:.9},itemStyle:{color:colors[i%3]},connectNulls:false,emphasis:{disabled:true},silent:false});
+    series.push({name:label,type:'line',data:chartData(key,multiplier,1),showSymbol:false,progressive:2000,progressiveThreshold:3000,lineStyle:['heading','course'].includes(key)?{width:1.7}:{width:1.2,opacity:.65,type:'dashed'},itemStyle:{color:colors[i%3]},connectNulls:false,
       markArea:i===0?{silent:true,itemStyle:{color:'#cf9b4315'},label:{show:false},data:(state.data.gaps||[]).map(g=>[{xAxis:g[0]*1000},{xAxis:g[1]*1000}])}:undefined,
       markLine:alarmLines.length?{symbol:'none',label:{fontSize:9,color:'#a76b3d',backgroundColor:'#fffaf1',padding:[2,3]},lineStyle:{type:'dashed',width:1.2,color:'#be7e46'},data:alarmLines}:undefined});
   });
@@ -369,7 +371,7 @@ function buildChart(id,metrics,options={}){
     return Number.isFinite(nearest?.[1])?[e.point_t*1000,nearest[1]*(metrics.find(m=>m[0]===eventKey)?.[3]||1),e.id]:null;
   }).filter(Boolean);
   series.push({name:'异常事件',type:'scatter',data:markers,symbol:'diamond',symbolSize:9,itemStyle:{color:'#bb6d38'},z:9});
-  const tooltip={trigger:'axis',renderMode:'richText',backgroundColor:'#fff',borderColor:'#d4dec9',textStyle:{fontSize:10,color:'#315c45'},valueFormatter:v=>number(v,3),axisPointer:{type:'line',snap:true,lineStyle:{color:'#b9793b',width:1,dashOffset:3}}};
+  const tooltip={trigger:'axis',renderMode:options.tooltipFormatter?'html':'richText',confine:Boolean(options.tooltipFormatter),backgroundColor:'#fff',borderColor:'#d4dec9',textStyle:{fontSize:10,color:'#315c45'},valueFormatter:v=>number(v,3),axisPointer:{type:'line',snap:true,lineStyle:{color:'#b9793b',width:1,dashOffset:3}}};
   if(options.tooltipFormatter)tooltip.formatter=options.tooltipFormatter;
   chart.setOption({animation:false,textStyle:{fontFamily:'PingFang SC, sans-serif'},grid:{left:55,right:28,top:options.compact?10:45,bottom:options.compact?30:60},legend:options.compact?{show:false}:{data:metrics.map(m=>m[1]),top:9,right:20,textStyle:{fontSize:10,color:'#788d6d'},itemWidth:13,itemHeight:2},
     tooltip,
@@ -521,7 +523,7 @@ function renderSignals(){
   if(!$('signalCharts').children.length)$('signalCharts').innerHTML=chartGroups.map(([title,unit],i)=>`<section class="panel"><div class="panel-head"><h2>${title}<span class="h2-unit">${unit}</span></h2><span class="muted">${String(i+1).padStart(2,'0')}</span></div><div class="chart" id="signal-${i}"></div><p class="signal-data-note" id="signal-note-${i}"></p></section>`).join('');
   chartGroups.forEach(([title,unit,metrics,explanation],i)=>{
     buildChart('signal-'+i,metrics,{threshold:metrics[0][0]==='speed'?state.device.rules.speed_kmh:metrics[0][0]==='age'?state.device.rules.age_s:undefined});
-    $('signal-note-'+i).textContent=(!state.data.total?'所选时段无采样。 ':signalRemovalNote(metrics)+' ')+(explanation||'');
+    $('signal-note-'+i).textContent=(!state.data.total?'所选时段无采样。 ':signalRemovalNote(metrics)+' ')+(explanation||'')+' '+PARAMETER_CURVE_NOTE;
   });
 }
 function offlineChartData(data,metric,multiplier,index){
@@ -547,8 +549,8 @@ function buildOfflineChart(id,metrics,options={}){
   let chart=echarts.getInstanceByDom(element);if(!chart){chart=echarts.init(element,null,{renderer:'canvas'});state.charts.push(chart);}
   const series=[];
   metrics.forEach(([key,label,unit,multiplier=1],i)=>{
-    if(!['heading','course'].includes(key))for(const index of [2,3])series.push({name:label+(index===2?' · 最小':' · 最大'),type:'line',data:offlineChartData(data,key,multiplier,index),showSymbol:false,progressive:2000,lineStyle:{width:1,opacity:.3},itemStyle:{color:colors[i%3]},connectNulls:false,silent:true});
-    series.push({name:label,type:'line',data:offlineChartData(data,key,multiplier,1),showSymbol:false,progressive:2000,lineStyle:{width:1.7},itemStyle:{color:colors[i%3]},connectNulls:false,
+    if(!['heading','course'].includes(key))for(const index of [2,3])series.push({name:label+(index===2?' · 最小':' · 最大'),type:'line',data:offlineChartData(data,key,multiplier,index),showSymbol:false,progressive:2000,lineStyle:{width:1.4,opacity:.9},itemStyle:{color:colors[i%3]},connectNulls:false,silent:false});
+    series.push({name:label,type:'line',data:offlineChartData(data,key,multiplier,1),showSymbol:false,progressive:2000,lineStyle:['heading','course'].includes(key)?{width:1.7}:{width:1.2,opacity:.65,type:'dashed'},itemStyle:{color:colors[i%3]},connectNulls:false,
       markArea:i===0?{silent:true,itemStyle:{color:'#cf9b4315'},label:{show:false},data:(data.gaps||[]).map(g=>[{xAxis:g[0]*1000},{xAxis:g[1]*1000}])}:undefined});
   });
   const eventMetric={overspeed:'speed',acceleration:'speed',braking:'speed',roll:'roll',pitch:'pitch',shock:'ax',position_std:'lat_std',diff_age:'age'};
@@ -601,7 +603,7 @@ function renderOfflineAnalysis(){
   const events=data.events.items.slice(0,100);$('offlineEventCount').textContent=`${data.events.total.toLocaleString()} 项`;
   $('offlineEvents').innerHTML=events.length?`<div class="table-scroll"><table><thead><tr><th>候选事件</th><th>时间</th><th>峰值 / 判据</th></tr></thead><tbody>${events.map(event=>`<tr><td><button class="text-button offline-event-link" data-offline-event="${event.id}">${esc(event.label)} ↗</button><small>${event.severity==='info'?'质量提示':'业务 / 设备预警'}</small></td><td>${stamp(event.start)}<small>至 ${clock(event.end)}</small></td><td>${number(event.peak,2)} / ${number(event.threshold,2)}<small>${event.samples} 个触发采样</small></td></tr>`).join('')}</tbody></table></div><div class="table-footer">离线重新计算的候选事件，不含在线确认或关闭状态。${data.events.truncated?'仅显示最近 2,000 项。':''}</div>`:'<div class="empty">当前规则下没有异常告警候选</div>';
   $('offlineAggregationLabel').textContent=`${data.aggregation.buckets} 个时间桶 · ${number(data.aggregation.query_ms,0)} ms`;
-  if(!$('offlineSignalCharts').children.length)$('offlineSignalCharts').innerHTML=chartGroups.map(([title,unit],index)=>`<section class="panel"><div class="panel-head"><h2>${title}<span class="h2-unit">${unit}</span></h2><span class="muted">${String(index+1).padStart(2,'0')}</span></div><div class="chart" id="offline-signal-${index}"></div></section>`).join('');
+  if(!$('offlineSignalCharts').children.length)$('offlineSignalCharts').innerHTML=chartGroups.map(([title,unit],index)=>`<section class="panel"><div class="panel-head"><h2>${title}<span class="h2-unit">${unit}</span></h2><span class="muted">${String(index+1).padStart(2,'0')}</span></div><div class="chart" id="offline-signal-${index}"></div><p class="signal-data-note">${PARAMETER_CURVE_NOTE}</p></section>`).join('');
   state.offlineChartCache.clear();renderOfflineMap();buildOfflineChart('offlineSpeedChart',[['speed','车辆速度','km/h',3.6]],{compact:true});
   chartGroups.forEach(([, ,metrics],index)=>buildOfflineChart('offline-signal-'+index,metrics));
 }

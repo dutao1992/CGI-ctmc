@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 python3 -m unittest discover -s tests -v
 node --check static/app.js
 node --check static/map.js
-node --test tests/test_map.cjs
+node --test tests/test_map.cjs tests/test_chart_peaks.cjs
 python3 deploy/cache-assets.py
 release="$(date +%Y%m%d-%H%M%S)"
 COPYFILE_DISABLE=1 tar --no-xattrs --exclude='__pycache__' --exclude='*.bin' -czf tmp/vehicle-release.tgz vehicle static tests docs deploy analysis README.md
@@ -16,7 +16,7 @@ release="/srv/ctmc-vehicle/releases/$RELEASE_ID"
 tar -xzf "$release/source.tgz" -C "$release"
 cd "$release"
 /usr/bin/python3.11 -m unittest discover -s tests -v
-node --test tests/test_map.cjs
+PYTHON=/usr/bin/python3.11 node --test tests/test_map.cjs tests/test_chart_peaks.cjs
 test -d /srv/chcnav-cgi430/logs/raw
 previous="$(readlink -f /srv/ctmc-vehicle/current 2>/dev/null || true)"
 platform_conf="$(readlink -f /srv/ctmc-quality/current)/deploy/web-standalone.conf"
