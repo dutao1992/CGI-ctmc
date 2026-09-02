@@ -4,6 +4,7 @@ Stationarity is supplied ground truth for a bounded device/time interval, not
 inferred from quiet IMU data (constant-velocity motion can also have quiet IMU).
 """
 import argparse
+import collections
 import hashlib
 import json
 import math
@@ -14,11 +15,31 @@ import time
 from .protocol import NUMERIC
 from .rules import distance
 
-VERSION = 3
+VERSION = 4
 # Frozen stationary manifests from the previous release remain valid facts.
-# Their profile thresholds are still usable by the v3 assessor; only the
+# Their profile thresholds are still usable by the v4 assessor; only the
 # decision version changes when the field-quarantine logic changes.
-COMPATIBLE_PROFILE_VERSIONS = (1, 2, VERSION)
+COMPATIBLE_PROFILE_VERSIONS = (1, 2, 3, VERSION)
+MAX_VALID_VEHICLE_SPEED_KMH = 130.0
+MAX_VALID_VEHICLE_SPEED_MS = MAX_VALID_VEHICLE_SPEED_KMH / 3.6
+BACKFILL_BATCH_SIZE = 20_000
+AUTO_ENTRY_POLICY = {
+    # Evaluate one representative sample per second over two minutes.  Quiet
+    # IMU alone is insufficient because a vehicle can travel at constant
+    # speed; low robust speed and a non-translating position cloud must agree.
+    'sample_interval_s': 1.0,
+    'min_duration_s': 120.0,
+    'min_samples': 100,
+    'max_gap_s': 2.0,
+    'min_valid_position_samples': 80,
+    'max_median_speed_ms': 0.5,
+    'max_p95_gyro_dps': 0.15,
+    'max_p95_accel_deviation_g': 0.02,
+    'max_median_position_std_m': 5.0,
+    'max_displacement_m': 15.0,
+    'max_p90_radius_m': 20.0,
+    'max_path_efficiency': 0.35,
+}
 # Stored as a numeric sentinel to keep the existing SQLite schema/index.  API
 # callers see ``end: null`` and ``active: true`` instead of a year-9999 date.
 OPEN_END = 253402300799.0
@@ -68,11 +89,13 @@ REASONS = {
     'invalid_navigation': ('导航初始化 / 定位无效（保留显示）', 'status'),
     'heading_unavailable': ('定向未就绪（保留显示）', 'status'),
     'course_unavailable': ('静止或低速航迹角（保留显示）', 'status'),
-    # v3 has one and only one quarantine rule: a confirmed stationary point
-    # whose position has drifted beyond the fitted stationary reference.
+    # Stationary position drift remains field-level evidence.  v4 also adds a
+    # domain hard stop for a navigation solution faster than the confirmed
+    # vehicle capability; raw measurements remain untouched.
     'stationary_position': ('静止定位偏差', 'anomaly'),
+    'navigation_velocity_outlier': ('导航速度解算超过车辆物理上限', 'anomaly'),
     # Kept as stable reason names so older clients can still parse an audit
-    # record; v3 no longer emits these quarantine reasons.
+    # record; v4 no longer emits these quarantine reasons.
     'position_uncertainty': ('历史规则：水平定位不确定度超限', 'legacy'),
     'stationary_altitude': ('历史规则：静止高程离群', 'legacy'),
     'altitude_uncertainty': ('历史规则：高程不确定度超限', 'legacy'),
@@ -110,6 +133,16 @@ def contexts(c, sn=None):
         except (TypeError, ValueError):
             detail = {'provenance': str(row['detail'] or '')}
         closures[row['target']] = dict(actor=row['actor'], action=row['action'], **detail)
+    origins = {}
+    for row in c.execute("""SELECT actor,action,detail FROM audit WHERE action IN (
+            'quality.stationary_context','quality.stationary_context.historical_replay',
+            'quality.stationary_context.auto_open') ORDER BY id"""):
+        try:
+            detail = json.loads(row['detail'])
+        except (TypeError, ValueError):
+            continue
+        if detail.get('id'):
+            origins[detail['id']] = dict(actor=row['actor'], action=row['action'])
     result = []
     for row in rows:
         item = dict(row, profile=json.loads(row['profile']))
@@ -119,6 +152,8 @@ def contexts(c, sn=None):
             item['auto_exit_policy'] = automatic_exit_policy(item)
         elif row['id'] in closures:
             item['closure'] = closures[row['id']]
+        if row['id'] in origins:
+            item['origin'] = origins[row['id']]
         result.append(item)
     return result
 
@@ -147,6 +182,100 @@ def automatic_exit_policy(context):
         2 * float(context['profile']['position_limit_m']),
     )
     return policy
+
+
+def automatic_entry_policy():
+    return dict(AUTO_ENTRY_POLICY)
+
+
+def percentile(values, fraction):
+    values = sorted(values)
+    if not values:
+        return None
+    position = (len(values) - 1) * fraction
+    lower = int(position)
+    weight = position - lower
+    return values[lower] * (1 - weight) + values[min(lower + 1, len(values) - 1)] * weight
+
+
+class AutomaticStationaryEntryDetector:
+    """Enter a stationary lifecycle only after independent evidence agrees."""
+    def __init__(self):
+        self.windows = {}
+
+    def forget(self, device_id):
+        self.windows.pop(device_id, None)
+
+    def observe(self, p, context=None):
+        device_id = p['device_id']
+        if context or p['t'] > time.time():
+            self.forget(device_id)
+            return None
+        required = ('speed','ve','vn','gx','gy','gz','ax','ay','az')
+        if any(not isinstance(p.get(key), (int, float)) or not math.isfinite(p[key]) for key in required):
+            self.forget(device_id)
+            return None
+        window = self.windows.setdefault(device_id, collections.deque())
+        policy = automatic_entry_policy()
+        if window and p['t'] <= window[-1]['t']:
+            self.forget(device_id)
+            return None
+        if window and p['t'] - window[-1]['t'] > policy['max_gap_s']:
+            window.clear()
+        if window and p['t'] - window[-1]['t'] < policy['sample_interval_s'] - 1e-6:
+            return None
+        sample = {key:p.get(key) for key in (
+            'device_id','t','lat','lon','speed','ve','vn','gx','gy','gz','ax','ay','az',
+            'lat_std','lon_std','valid_pos','nav_mode','fix_mode',
+        )}
+        window.append(sample)
+        while window and p['t'] - window[0]['t'] > policy['min_duration_s'] + policy['sample_interval_s']:
+            window.popleft()
+        duration = window[-1]['t'] - window[0]['t']
+        if duration < policy['min_duration_s'] or len(window) < policy['min_samples']:
+            return None
+        valid = [x for x in window if x.get('valid_pos') and x.get('nav_mode') != 0 and
+                 isinstance(x.get('lat'), (int, float)) and isinstance(x.get('lon'), (int, float)) and
+                 x['lat'] and x['lon']]
+        if len(valid) < policy['min_valid_position_samples']:
+            return None
+        speeds = [x['speed'] for x in window]
+        vector_speeds = [math.hypot(x['ve'], x['vn']) for x in window]
+        gyro_norms = [math.sqrt(x['gx']**2 + x['gy']**2 + x['gz']**2) for x in window]
+        accel_norms = [math.sqrt(x['ax']**2 + x['ay']**2 + x['az']**2) for x in window]
+        accel_center = median(accel_norms)
+        position_stds = [max(x.get('lat_std') or 0, x.get('lon_std') or 0) for x in valid]
+        anchor = {'lat':median([x['lat'] for x in valid]), 'lon':median([x['lon'] for x in valid])}
+        radii = [distance(x, anchor) for x in valid]
+        path_distance = sum(distance(left, right) for left, right in zip(valid, valid[1:]))
+        displacement = distance(valid[0], valid[-1])
+        path_efficiency = displacement / path_distance if path_distance else 0.0
+        evidence = dict(
+            candidate_start=window[0]['t'], detected_at=window[-1]['t'],
+            duration_s=round(duration, 3), samples=len(window), valid_position_samples=len(valid),
+            median_speed_ms=round(median(speeds), 4),
+            median_vector_speed_ms=round(median(vector_speeds), 4),
+            p95_gyro_dps=round(percentile(gyro_norms, .95), 4),
+            p95_accel_deviation_g=round(percentile([abs(v-accel_center) for v in accel_norms], .95), 6),
+            median_position_std_m=round(median(position_stds), 3),
+            displacement_m=round(displacement, 3), path_distance_m=round(path_distance, 3),
+            path_efficiency=round(path_efficiency, 4), p90_radius_m=round(percentile(radii, .9), 3),
+            anchor=anchor, policy=policy,
+        )
+        qualified = (
+            evidence['median_speed_ms'] <= policy['max_median_speed_ms'] and
+            evidence['median_vector_speed_ms'] <= policy['max_median_speed_ms'] and
+            evidence['p95_gyro_dps'] <= policy['max_p95_gyro_dps'] and
+            evidence['p95_accel_deviation_g'] <= policy['max_p95_accel_deviation_g'] and
+            evidence['median_position_std_m'] <= policy['max_median_position_std_m'] and
+            evidence['displacement_m'] <= policy['max_displacement_m'] and
+            evidence['p90_radius_m'] <= policy['max_p90_radius_m'] and
+            evidence['path_efficiency'] <= policy['max_path_efficiency']
+        )
+        if not qualified:
+            return None
+        self.forget(device_id)
+        return evidence
 
 
 class ActiveStationaryExitDetector:
@@ -284,8 +413,25 @@ def assess(p, context=None, explain=False):
     if context or p.get('speed') is None or p['speed'] < 1 or not p.get('valid_pos'):
         note('course_unavailable', ['course','course_std'])
 
+    horizontal_speed = None
+    if p.get('ve') is not None and p.get('vn') is not None:
+        horizontal_speed = math.hypot(p['ve'], p['vn'])
+    velocity_outlier = (
+        (p.get('speed') is not None and p['speed'] > MAX_VALID_VEHICLE_SPEED_MS) or
+        (horizontal_speed is not None and horizontal_speed > MAX_VALID_VEHICLE_SPEED_MS) or
+        (p.get('vu') is not None and abs(p['vu']) > MAX_VALID_VEHICLE_SPEED_MS)
+    )
+    if velocity_outlier:
+        # The 2026-09-02 failure corrupted scalar, vector and vertical velocity
+        # together.  Quarantine the navigation solution fields, not the IMU or
+        # the immutable raw point, so maps and summaries cannot reuse it.
+        reject('navigation_velocity_outlier',
+               ['lat','lon','alt','speed','ve','vn','vu','course','course_std'],
+               dict(speed_ms=p.get('speed'),horizontal_speed_ms=horizontal_speed,vertical_speed_ms=p.get('vu')),
+               MAX_VALID_VEHICLE_SPEED_MS)
+
     if context and p.get('valid_pos') and p.get('nav_mode') != 0:
-        # The sole v3 quarantine rule.  A confirmed stationary interval may
+        # A confirmed stationary interval may
         # retain every inertial, speed and quality channel; only coordinates
         # that drift away from the fitted anchor are removed from the running
         # projection so they cannot form a false route.
@@ -397,7 +543,7 @@ def make_active(scope, training_start=None, training_end=None):
     return active
 
 
-def install_context(c, scope):
+def install_context(c, scope, actor='user-confirmed/deployment', action='quality.stationary_context'):
     active = scope['kind'] == 'confirmed_stationary_active' and scope.get('end') is None
     bounded = scope['kind'] == 'confirmed_stationary' and scope.get('end') is not None
     profile_version = scope.get('profile', {}).get('version')
@@ -424,10 +570,27 @@ def install_context(c, scope):
     c.execute('INSERT INTO quality_contexts VALUES (?,?,?,?,?,?,?,?)',
               (scope['id'],scope['device_id'],scope['start'],stored_end,scope['kind'],json.dumps(scope['profile']),scope['provenance'],time.time()))
     c.execute('INSERT INTO audit(t,actor,action,target,detail) VALUES (?,?,?,?,?)',
-              (time.time(),'user-confirmed/deployment','quality.stationary_context',scope['device_id'],json.dumps(scope,ensure_ascii=False)))
+              (time.time(),actor,action,scope['device_id'],json.dumps(scope,ensure_ascii=False)))
     # Old decisions for this exact scope must not remain available while backfill runs.
-    c.execute('DELETE FROM point_quality WHERE device_id=? AND t BETWEEN ? AND ?', (scope['device_id'],scope['start'],scope['end']))
+    c.execute('DELETE FROM point_quality WHERE device_id=? AND t BETWEEN ? AND ?',
+              (scope['device_id'],scope['start'],stored_end))
     return True
+
+
+def auto_open_stationary_context(c, p, evidence):
+    """Create an auditable active context after multi-signal confirmation."""
+    start, detected_at = evidence['candidate_start'], evidence['detected_at']
+    fitted = build_context(
+        c, p['device_id'], start, detected_at,
+        '系统自动识别：持续低速、稳定陀螺/比力与非连贯位置位移共同证明设备静止',
+    )
+    scope = make_active(fitted, start, detected_at)
+    scope['profile']['automatic_entry'] = evidence
+    scope.pop('id', None)
+    scope['id'] = hashlib.sha256(json.dumps({k:v for k,v in scope.items() if k != 'active'},
+                                            sort_keys=True).encode()).hexdigest()[:20]
+    install_context(c, scope, 'system/automatic', 'quality.stationary_context.auto_open')
+    return scope
 
 
 def _close_active_context(c, context_id, end, provenance, actor, action, evidence=None):
@@ -470,7 +633,8 @@ def backfill(store):
         while True:
             with store.connect() as c:
                 scopes = contexts(c)
-                rows = c.execute(JOIN+' WHERE q.version IS NULL OR q.version!=? LIMIT 2000', (VERSION,)).fetchall()
+                rows = c.execute(JOIN+' WHERE q.version IS NULL OR q.version!=? LIMIT ?',
+                                 (VERSION,BACKFILL_BATCH_SIZE)).fetchall()
                 if not rows:
                     break
                 for row in rows:

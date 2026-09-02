@@ -1,0 +1,62 @@
+{
+  "device_id": "6094510",
+  "start": 1788252345.9,
+  "end": 1788252689.599,
+  "kind": "confirmed_stationary",
+  "profile": {
+    "anchor": {"lat": 31.22435584, "lon": 121.62081052},
+    "centers": {
+      "lat": 31.22435584, "lon": 121.62081052, "alt": 19.63,
+      "speed": 0.11, "ve": 0.01, "vn": 0.01, "vu": -0.02,
+      "gx": 0.0, "gy": 0.02, "gz": -0.02,
+      "ax": 0.006, "ay": 0.0051, "az": 0.9971,
+      "pitch": 0.29000000000002046, "roll": -0.35000000000002274
+    },
+    "mad": {
+      "lat": 3.359999997343266e-06, "lon": 2.2350000008941606e-05,
+      "alt": 2.5599999999999987, "speed": 0.06,
+      "ve": 0.09, "vn": 0.04, "vu": 0.19,
+      "gx": 0.01, "gy": 0.01, "gz": 0.0,
+      "ax": 0.0005999999999999998, "ay": 0.0009000000000000006,
+      "az": 0.0010999999999999899, "pitch": 0.05999999999997385,
+      "roll": 0.03999999999996362
+    },
+    "limits": {
+      "alt": 22.772735999999988, "speed": 0.533736, "ve": 0.800604,
+      "vn": 0.35582400000000003, "vu": 1.690164,
+      "gx": 0.15, "gy": 0.15, "gz": 0.15,
+      "ax": 0.02, "ay": 0.02, "az": 0.02, "pitch": 1, "roll": 1
+    },
+    "position_limit_m": 11.60359167346774,
+    "horizontal_limit_ms": 0.800604,
+    "radial_median_m": 2.1365159941740055,
+    "radial_mad_m": 1.0642425108248725,
+    "population": 1211,
+    "valid_population": 1211,
+    "training_samples": 1211,
+    "stride": 1,
+    "method": "v4 全历史回放：两分钟多信号静止进入 + 持续运动退出",
+    "version": 4,
+    "training_start": 1788252345.9,
+    "training_end": 1788252466.9,
+    "position_std_limit_m": 5.0,
+    "altitude_std_limit_m": 8.0,
+    "historical_replay": {
+      "entry": {
+        "detected_at": 1788252466.9, "duration_s": 121.0, "samples": 122,
+        "median_speed_ms": 0.12, "median_vector_speed_ms": 0.1206,
+        "p95_gyro_dps": 0.0613, "p95_accel_deviation_g": 0.003089,
+        "median_position_std_m": 4.99, "displacement_m": 12.018,
+        "path_efficiency": 0.1551, "p90_radius_m": 6.809
+      },
+      "exit": {
+        "route": "satellite_vehicle_motion", "candidate_start": 1788252689.6,
+        "detected_at": 1788252699.6, "duration_s": 10.0, "samples": 101,
+        "displacement_m": 137.947, "path_efficiency": 0.999,
+        "speed_distance_m": 137.973, "distance_ratio": 1.0
+      }
+    }
+  },
+  "provenance": "v4 全历史原始采样回放：多信号静止进入与持续运动退出均满足；非用户手工确认",
+  "id": "37ba22eb6377e9e2ab0c"
+}

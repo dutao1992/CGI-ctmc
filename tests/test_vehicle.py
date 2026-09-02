@@ -478,13 +478,78 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(original['speed'],5);self.assertEqual(original['ax'],2)
         result=self.store.query('6094510',self.t-1,t+1)
         self.assertEqual(result['summary']['distance_km'],0);self.assertEqual(result['summary']['moving_s'],0)
-        self.assertEqual(result['summary']['max_kmh'],18)
+        self.assertIsNone(result['summary']['max_kmh'])
         self.assertFalse(any(x['t']==t for x in result['track']))
         self.assertTrue(any(x[1] is not None for x in result['series']['heading']))
         self.assertEqual(result['quality']['anomaly_samples'],1)
         records=self.store.quality_records('6094510',self.t-1,t+1)
         self.assertEqual(records['total'],1);self.assertEqual(records['items'][0]['t'],t)
         self.assertIn('stationary_position',{d['code'] for d in records['items'][0]['details']})
+
+    def test_impossible_navigation_velocity_is_removed_from_effective_curves_only(self):
+        p=parse(LIVE[0]);tow=p['tow'];self.t=p['t']
+        normal=altered(tow=tow,status='91',speed=20,ve=20,vn=0,vu=0,
+                       lat_std=.5,lon_std=.5,alt_std=1)
+        spike=altered(tow=tow+1,status='71',speed=111.62,ve=111.61,vn=-1.1,vu=88.55,
+                      lat=p['lat']+.02,gx=.04,ax=.997,
+                      lat_std=.5,lon_std=.5,alt_std=1)
+        self.ingest(normal,spike)
+        clean=self.store.point('6094510',self.t+1)
+        original=self.store.point('6094510',self.t+1,raw=True)
+        for key in ('lat','lon','alt','speed','ve','vn','vu','course','course_std'):
+            self.assertIsNone(clean[key],key)
+        self.assertEqual(clean['gx'],.04);self.assertEqual(clean['ax'],.997)
+        self.assertEqual(original['speed'],111.62);self.assertEqual(original['vu'],88.55)
+        result=self.store.query('6094510',self.t-1,self.t+2)
+        self.assertEqual(result['summary']['max_kmh'],72)
+        self.assertLessEqual(max(row[3] for row in result['series']['speed'] if row[3] is not None),20)
+        self.assertEqual(len(result['track']),1)
+        records=self.store.quality_records('6094510',self.t,self.t+2,'anomaly')
+        self.assertEqual(records['total'],1)
+        self.assertIn('navigation_velocity_outlier',
+                      {detail['code'] for detail in records['items'][0]['details']})
+
+    def test_auto_entry_rejects_quiet_translation_then_confirms_static_drift(self):
+        p=parse(LIVE[0]);tow=p['tow'];self.t=p['t']
+        # Quiet constant-velocity motion has calm IMU data, but its coherent
+        # displacement must prevent an automatic stationary declaration.
+        moving=[altered(tow=tow+i,status='91',speed=.3,ve=0,vn=.3,
+                        lat=p['lat']+i*.0000027,
+                        lat_std=.5,lon_std=.5,alt_std=1) for i in range(121)]
+        self.ingest(*moving)
+        with self.store.connect() as c:
+            self.assertFalse(quality.contexts(c,'6094510'))
+
+        anchor_lat=p['lat']+120*.0000027
+        static=[altered(tow=tow+i,status='91',speed=1.2 if i%10==0 else .2,
+                        ve=0,vn=.2,lat=anchor_lat+(i%5-2)*.000001,
+                        lon=p['lon']+(i%7-3)*.000001,
+                        lat_std=1.5,lon_std=1.5,alt_std=1) for i in range(121,242)]
+        self.ingest(*static)
+        with self.store.connect() as c:
+            contexts=quality.contexts(c,'6094510')
+            audit=c.execute("SELECT * FROM audit WHERE action='quality.stationary_context.auto_open'").fetchone()
+        self.assertEqual(len(contexts),1);context=contexts[0]
+        self.assertTrue(context['active']);self.assertEqual(audit['actor'],'system/automatic')
+        self.assertEqual(context['origin']['action'],'quality.stationary_context.auto_open')
+        evidence=context['profile']['automatic_entry']
+        self.assertLessEqual(evidence['median_speed_ms'],.5)
+        self.assertLessEqual(evidence['displacement_m'],15)
+        self.assertLessEqual(evidence['path_efficiency'],.35)
+        self.assertLessEqual(context['start'],self.t+121)
+
+        # Once stationary is confirmed, a later GNSS wander cannot form a
+        # route or a highest-effective-speed value, while its raw value stays.
+        drift=altered(tow=tow+242,status='91',speed=2,ve=0,vn=.2,
+                      lat=anchor_lat+.001,lat_std=8,lon_std=8,alt_std=1)
+        self.ingest(drift)
+        clean=self.store.point('6094510',self.t+242)
+        self.assertIsNone(clean['lat']);self.assertIsNone(clean['lon'])
+        self.assertEqual(clean['speed'],2)
+        result=self.store.query('6094510',context['start'],self.t+243)
+        self.assertEqual(result['summary']['moving_s'],0)
+        self.assertIsNone(result['summary']['max_kmh'])
+        self.assertFalse(any(item['t']==self.t+242 for item in result['track']))
 
     def test_bounded_fact_does_not_filter_future_motion_or_another_device(self):
         self.reference();p=parse(LIVE[0]);tow=p['tow']
@@ -868,6 +933,18 @@ class DeployPreparationTests(unittest.TestCase):
         self.assertEqual(result['quick_check'],'not_run_current_rollups')
         self.assertTrue(all(level['ready'] for level in result['verified_levels']))
         self.assertEqual(rollup_prepare.prepare(self.store.path,verify_current=True)['quick_check'],'ok')
+
+    def test_historical_replay_context_keeps_system_origin(self):
+        p=parse(LIVE[0]);tow=p['tow'];self.t=p['t']
+        self.ingest(*[altered(tow=tow+i*.1,speed=.05,ve=.01,vn=.01,vu=0) for i in range(120)])
+        with self.store.connect() as c:
+            scope=quality.build_context(c,p['device_id'],self.t,self.t+11.9,'historical replay test')
+            scope['profile']['historical_replay']={'entry':{'detected_at':self.t+11.9}}
+            quality_prepare=self.module('prepare-quality.py')
+            self.assertTrue(quality_prepare.install_scope(c,scope))
+            loaded=quality.contexts(c,p['device_id'])[0]
+        self.assertEqual(loaded['origin']['actor'],'system/historical-replay')
+        self.assertEqual(loaded['origin']['action'],'quality.stationary_context.historical_replay')
 
     def test_invalid_rollup_version_forces_rebuild(self):
         self.ingest(LIVE[0]);rollup_prepare=self.module('prepare-rollups.py')

@@ -404,7 +404,7 @@ class Store:
         return dict(version=quality.VERSION,total=total,excluded_samples=excluded,anomaly_samples=anomalies,
                     unavailable_samples=unavailable,status_samples=status,pending_samples=pending,excluded_fields=dict(field_counts),
                     reasons=[dict(code=k,label=label,category=kind,count=reason_counts[k]) for k,(label,kind) in quality.REASONS.items()],
-                    contexts=scopes,policy='状态提示不屏蔽参数；仅确认静止段定位偏差隔离经纬度；原始值保留，空缺不补零、不插值')
+                    contexts=scopes,policy='状态提示不屏蔽参数；超过 130 km/h 的失真导航解及确认静止段定位偏差按字段隔离；原始值保留，空缺不补零、不插值')
 
     def quality_records(self, sn, start, end, reason='anomaly', offset=0, limit=50):
         if reason == 'anomaly': bits = quality.ANOMALY_BITS
@@ -602,6 +602,7 @@ class Ingestor:
         self.states = {}
         self.file_cache = {}
         self.quality_contexts = []
+        self.stationary_entry = quality.AutomaticStationaryEntryDetector()
         self.stationary_exit = quality.ActiveStationaryExitDetector()
 
     def _event(self, c, p, state, kind, value, threshold, severity, dwell, rules):
@@ -627,26 +628,45 @@ class Ingestor:
 
     def _point(self, c, p, stat):
         sn = p['device_id']
-        row = c.execute('SELECT * FROM devices WHERE id=?', (sn,)).fetchone()
-        if not row:
+        device_row = c.execute('SELECT * FROM devices WHERE id=?', (sn,)).fetchone()
+        if not device_row:
             c.execute('INSERT INTO devices(id,name,rules,first_t,last_t,last_received,latest) VALUES (?,?,?,?,?,?,?)',
                       (sn,'CGI-430 · '+sn,json.dumps(DEFAULTS),p['t'],p['t'],stat.st_mtime,json.dumps(p)))
-            row = c.execute('SELECT * FROM devices WHERE id=?',(sn,)).fetchone()
-        rules = json.loads(row['rules'])
+            device_row = c.execute('SELECT * FROM devices WHERE id=?',(sn,)).fetchone()
+        rules = json.loads(device_row['rules'])
         keys = list(p)
         result = c.execute(f'INSERT OR IGNORE INTO points ({",".join(keys)}) VALUES ({",".join("?" for _ in keys)})',list(p.values()))
         if not result.rowcount:
             return False
         raw_point = p
         active_context = quality.context_for(p,self.quality_contexts)
-        if active_context and p['t'] < row['last_t']:
+        late = p['t'] < device_row['last_t']
+        entry_evidence = None
+        if late:
             # A late historical frame must never move a live lifecycle boundary
             # backwards or delete assessments for newer samples.
-            self.stationary_exit.forget(active_context['id'])
+            if active_context:
+                self.stationary_exit.forget(active_context['id'])
+            self.stationary_entry.forget(sn)
             exit_evidence = None
-        else:
+        elif active_context:
+            self.stationary_entry.forget(sn)
             exit_evidence = self.stationary_exit.observe(p,active_context)
+        else:
+            exit_evidence = None
+            entry_evidence = self.stationary_entry.observe(p)
         reassessed_buckets = set()
+        if entry_evidence:
+            # Like automatic exit, entry is retrospective: once two minutes of
+            # independent evidence agree, reclassify from the candidate start.
+            scope = quality.auto_open_stationary_context(c,p,entry_evidence)
+            self.quality_contexts = quality.contexts(c)
+            active_context = next(item for item in self.quality_contexts if item['id'] == scope['id'])
+            for point_row in c.execute('SELECT * FROM points WHERE device_id=? AND t>=? AND t<? ORDER BY t,protocol',
+                                       (sn,entry_evidence['candidate_start'],p['t'])):
+                quality.write_assessment(c,dict(point_row),self.quality_contexts)
+                reassessed_buckets.add(bucket_start(point_row['t']))
+            self.store.bump_query_cache_epoch(c)
         if exit_evidence:
             # Confirmation is retrospective: once the full evidence window is
             # satisfied, restore every candidate sample to the ordinary motion
@@ -654,10 +674,10 @@ class Ingestor:
             close_end = exit_evidence['candidate_start'] - .001
             quality.auto_close_active_context(c,active_context['id'],close_end,exit_evidence)
             self.quality_contexts = quality.contexts(c)
-            for row in c.execute('SELECT * FROM points WHERE device_id=? AND t>? AND t<? ORDER BY t,protocol',
-                                 (sn,close_end,p['t'])):
-                quality.write_assessment(c,dict(row),self.quality_contexts)
-                reassessed_buckets.add(bucket_start(row['t']))
+            for point_row in c.execute('SELECT * FROM points WHERE device_id=? AND t>? AND t<? ORDER BY t,protocol',
+                                       (sn,close_end,p['t'])):
+                quality.write_assessment(c,dict(point_row),self.quality_contexts)
+                reassessed_buckets.add(bucket_start(point_row['t']))
             self.store.bump_query_cache_epoch(c)
         mask, reasons, context_id = quality.write_assessment(c,p,self.quality_contexts)
         if reassessed_buckets:
@@ -676,7 +696,7 @@ class Ingestor:
         while history and history[0]['t'] < p['t']-1.5:
             history.popleft()
         baseline = next((x for x in history if p['t']-x['t']>=.8),None)
-        signals = conditions(p,state['prev'],baseline,rules,bool(row['mount_confirmed']))
+        signals = conditions(p,state['prev'],baseline,rules,bool(device_row['mount_confirmed']))
         for kind in list(state['active']):
             if kind not in signals:
                 del state['active'][kind]

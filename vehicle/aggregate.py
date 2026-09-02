@@ -114,7 +114,10 @@ class RollupBuilder:
         self.fixed += int(p['fix_mode'] in (4,8))
         self.valid += int(bool(p['valid_pos']))
         self.fix_counts[str(p['fix_mode'])] += 1
-        if p['speed'] is not None:
+        # "最高有效速度" excludes confirmed stationary residuals and invalid
+        # navigation solutions; the raw speed channel remains available in the
+        # series/evidence view unless the v4 physical-limit rule quarantines it.
+        if p['speed'] is not None and p['valid_pos'] and not p.get('stationary_context'):
             self.max_speed = max(self.max_speed or 0,p['speed']*3.6)
         for metric in METRICS:
             value = p[metric]
@@ -321,7 +324,7 @@ class QueryCombiner:
         return dict(version=quality.VERSION,total=self.count,excluded_samples=excluded,anomaly_samples=anomalies,
                     unavailable_samples=unavailable,status_samples=status,pending_samples=pending,excluded_fields=dict(field_counts),
                     reasons=[dict(code=k,label=label,category=kind,count=reason_counts[k]) for k,(label,kind) in quality.REASONS.items()],
-                    contexts=scopes,policy='状态提示不屏蔽参数；仅确认静止段定位偏差隔离经纬度；原始值保留，空缺不补零、不插值')
+                    contexts=scopes,policy='状态提示不屏蔽参数；超过 130 km/h 的失真导航解及确认静止段定位偏差按字段隔离；原始值保留，空缺不补零、不插值')
 
     def finish(self, contexts, source, source_resolution_s, elapsed_ms):
         series = {key:[] for key in METRICS}
@@ -399,7 +402,7 @@ class QueryCombiner:
                     aggregation=dict(buckets=len(self.groups),bucket_s=(self.end-self.start)/self.bins,
                                      source=source,source_resolution_s=source_resolution_s,query_ms=round(elapsed_ms,1),cache_hit=False,
                                      track_points=len(track),track_limit=TRACK_LIMIT,track_truncated=self.track_truncated or len(self.track)>TRACK_LIMIT,
-                                     method='先按 v3 规则隔离确认静止段定位偏差经纬度，再计算等时桶均值/最小/最大；不插值；长窗口分层读取可重建的 60 秒或 10 分钟聚合，首尾读取原始采样；状态提示不屏蔽参数，剔除原值见数据质量',
+                                     method='先按 v4 规则隔离超过车辆物理上限的失真导航解及确认静止段定位偏差，再计算等时桶均值/最小/最大；不插值；长窗口分层读取可重建的 60 秒或 10 分钟聚合，首尾读取原始采样；状态提示不屏蔽参数，剔除原值见数据质量',
                                      timezone='Asia/Shanghai',coordinates='WGS84 原始坐标；前端高德底图单独转换为 GCJ-02 展示',
                                      mileage='有效定位且连续速度≥3.6 km/h 时的速度梯形积分；缺测不外推，非 CAN 里程'))
 

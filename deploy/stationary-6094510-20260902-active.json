@@ -1,0 +1,70 @@
+{
+  "device_id": "6094510",
+  "start": 1788307025.7,
+  "end": null,
+  "kind": "confirmed_stationary_active",
+  "profile": {
+    "anchor": {"lat": 31.24681414, "lon": 121.61566548},
+    "centers": {
+      "lat": 31.24681414, "lon": 121.61566548, "alt": 32.21,
+      "speed": 0.4, "ve": -0.03, "vn": 0.16, "vu": 0.04,
+      "gx": 0.0, "gy": 0.03, "gz": -0.02,
+      "ax": -0.0051, "ay": 0.0062, "az": 0.997,
+      "pitch": 0.36000000000001364, "roll": 0.28999999999999204
+    },
+    "mad": {
+      "lat": 2.31099999972173e-05, "lon": 1.3129999999250686e-05,
+      "alt": 6.960000000000001, "speed": 0.22999999999999998,
+      "ve": 0.12, "vn": 0.30000000000000004, "vu": 0.36000000000000004,
+      "gx": 0.01, "gy": 0.010000000000000002, "gz": 0.0,
+      "ax": 0.0007000000000000001, "ay": 0.0005999999999999998,
+      "az": 0.0007000000000000339, "pitch": 0.03999999999999204,
+      "roll": 0.040000000000020464
+    },
+    "limits": {
+      "alt": 15.0, "speed": 2.045988, "ve": 1.067472, "vn": 2.66868,
+      "vu": 3.2024160000000004, "gx": 0.15, "gy": 0.15, "gz": 0.15,
+      "ax": 0.02, "ay": 0.02, "az": 0.02, "pitch": 1, "roll": 1
+    },
+    "position_limit_m": 15.0,
+    "horizontal_limit_ms": 2.66868,
+    "radial_median_m": 3.4399940485673914,
+    "radial_mad_m": 1.828879885636328,
+    "population": 1211,
+    "valid_population": 795,
+    "training_samples": 795,
+    "stride": 1,
+    "method": "median + 6 × 1.4826 × MAD, engineering floors and confirmed-static quality caps",
+    "version": 4,
+    "training_start": 1788307025.7,
+    "training_end": 1788307146.7,
+    "position_std_limit_m": 5.0,
+    "altitude_std_limit_m": 8.0,
+    "automatic_entry": {
+      "candidate_start": 1788307025.7, "detected_at": 1788307146.7,
+      "duration_s": 121.0, "samples": 122, "valid_position_samples": 80,
+      "median_speed_ms": 0.18, "median_vector_speed_ms": 0.1856,
+      "p95_gyro_dps": 0.0676, "p95_accel_deviation_g": 0.002577,
+      "median_position_std_m": 3.97, "displacement_m": 12.261,
+      "path_distance_m": 217.476, "path_efficiency": 0.0564,
+      "p90_radius_m": 7.489
+    },
+    "auto_exit": {
+      "min_speed_ms": 0.15, "min_duration_s": 15.0, "min_samples": 10,
+      "max_gap_s": 1.5, "max_position_std_m": 1.0,
+      "min_anchor_distance_m": 30.0, "min_displacement_m": 8.0,
+      "min_path_efficiency": 0.5, "nav_modes": [2], "fix_modes": [4, 5, 8, 9],
+      "vehicle_motion": {
+        "min_speed_ms": 1.0, "min_duration_s": 10.0, "min_samples": 20,
+        "max_gap_s": 0.3, "max_position_std_m": 5.0,
+        "min_anchor_distance_m": 30.0, "min_displacement_m": 25.0,
+        "min_path_efficiency": 0.65, "min_distance_ratio": 0.65,
+        "max_distance_ratio": 1.35, "max_velocity_error_ms": 0.75,
+        "nav_modes": [1, 2], "fix_modes": [4, 5, 8, 9]
+      }
+    }
+  },
+  "provenance": "用户确认：v4 全历史回放在 2026-09-02 07:57:05.7（北京时间）已出现可靠静止证据；该边界可作为最新持续静止起点",
+  "active": true,
+  "id": "e3bb30e64bc08f020a86"
+}

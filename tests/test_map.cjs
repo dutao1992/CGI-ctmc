@@ -237,6 +237,19 @@ test('quality page explains conservative automatic exit and keeps manual close a
   assert.doesNotMatch(h.node('filterSummary').innerHTML,/出发前关闭静止状态/);
 });
 
+test('quality page distinguishes historical replay from user-confirmed stationary facts',async()=>{
+  const h=await appHarness(),anchor={lat:31.2456,lon:121.616};
+  h.app.setData({quality:{version:4,total:100,anomaly_samples:2,status_samples:3,pending_samples:0,reasons:[],contexts:[{
+    id:'history-1',device_id:'SN1',start:100,end:200,active:false,
+    origin:{actor:'system/historical-replay',action:'quality.stationary_context.historical_replay'},
+    profile:{anchor,valid_population:100,training_samples:100,position_limit_m:15,horizontal_limit_ms:.3,position_std_limit_m:5,limits:{alt:15},centers:{alt:10}}
+  }]}});
+  h.app.renderFilterSummary();
+  assert.match(h.node('filterSummary').innerHTML,/历史算法回放静止/);
+  assert.match(h.node('filterSummary').innerHTML,/非用户手工确认|全量回放得到/);
+  assert.doesNotMatch(h.node('filterSummary').innerHTML,/用户确认静止/);
+});
+
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
 test('quick ranges anchor to the fresh current clock or freshly loaded device sample, and every chart uses exact query bounds',async()=>{
   const h=await appHarness();h.setDevices([deviceFixture()]);

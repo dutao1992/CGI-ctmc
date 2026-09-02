@@ -13,6 +13,14 @@ from vehicle import quality
 from vehicle.store import Store
 
 
+def install_scope(connection, scope):
+    historical = scope.get('profile', {}).get('historical_replay')
+    if historical:
+        return quality.install_context(connection,scope,'system/historical-replay',
+                                       'quality.stationary_context.historical_replay')
+    return quality.install_context(connection,scope)
+
+
 def raw_digest(connection):
     digest = hashlib.sha256()
     count = 0
@@ -33,7 +41,7 @@ def prepare(db, backup, context_paths):
     # the immutable contexts and all quality decisions are already current.
     with store.connect() as c:
         c.execute('BEGIN')
-        installed_contexts = [dict(id=scope['id'],installed=quality.install_context(c,scope)) for scope in scopes]
+        installed_contexts = [dict(id=scope['id'],installed=install_scope(c,scope)) for scope in scopes]
         pending = c.execute('SELECT COUNT(*) FROM ('+quality.JOIN+' WHERE q.version IS NULL OR q.version!=?)',(quality.VERSION,)).fetchone()[0]
         c.rollback()
     if not any(item['installed'] for item in installed_contexts) and not pending:
@@ -67,7 +75,7 @@ def prepare(db, backup, context_paths):
                                    (scope['device_id'],train_start,train_end)).fetchone()[0]
                 if actual != scope['profile']['population']:
                     raise ValueError(f'参考区间实际有 {actual} 条采样，与训练快照 {scope["profile"]["population"]} 条不一致；先核对再发布')
-            installed_contexts.append(dict(id=scope['id'],installed=quality.install_context(c,scope)))
+            installed_contexts.append(dict(id=scope['id'],installed=install_scope(c,scope)))
     assessed = quality.backfill(store)
     with store.connect() as c:
         after = raw_digest(c)

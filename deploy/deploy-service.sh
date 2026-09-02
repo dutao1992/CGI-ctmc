@@ -63,7 +63,11 @@ systemctl stop ctmc-vehicle.service
   --backup "/srv/ctmc-vehicle/backups/quality-before-$RELEASE_ID.sqlite" \
   --context deploy/stationary-6094510-20260826.json \
   --context deploy/stationary-6094510-20260827-gap.json \
-  --context deploy/stationary-6094510-20260827-active.json
+  --context deploy/stationary-6094510-20260827-active.json \
+  --context deploy/stationary-6094510-20260901-replay-1.json \
+  --context deploy/stationary-6094510-20260901-replay-2.json \
+  --context deploy/stationary-6094510-20260901-replay-3.json \
+  --context deploy/stationary-6094510-20260902-active.json
 /usr/bin/python3.11 -m vehicle.retention --prepare-backup "/srv/ctmc-vehicle/backups/retention-before-$RELEASE_ID.sqlite"
 /usr/bin/python3.11 deploy/prepare-rollups.py --db /srv/ctmc-vehicle/data/vehicle.sqlite
 ln -sfn "$release" /srv/ctmc-vehicle/current
