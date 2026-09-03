@@ -24,6 +24,10 @@ from .offline import (EXPORT_FIELDS, MAX_BYTES as OFFLINE_MAX_BYTES,
                       MAX_GZIP_BYTES as OFFLINE_MAX_GZIP_BYTES, analyze_stream)
 
 
+QUERY_SLOT_WAIT_SECONDS = 15
+QUERY_SLOT_RETRY_AFTER_SECONDS = 2
+
+
 def create_handler(store, raw_root, static_root, auth_url):
     query_slots = threading.BoundedSemaphore(2)
     class Handler(BaseHTTPRequestHandler):
@@ -123,6 +127,15 @@ def create_handler(store, raw_root, static_root, auth_url):
                 raise ValueError('时间范围无效，单次最长 31 天')
             return sn,start,end
 
+        def acquire_query_slot(self,message):
+            # Keep the two-query CPU bound, but queue a brief burst instead of
+            # turning a normal multi-tab/refresh race into a user-visible 429.
+            if query_slots.acquire(timeout=QUERY_SLOT_WAIT_SECONDS):
+                return True
+            self.send(429,{'error':message},
+                      headers={'Retry-After':str(QUERY_SLOT_RETRY_AFTER_SECONDS)})
+            return False
+
         def do_GET(self):
             try:
                 route,args = self.arguments()
@@ -142,8 +155,7 @@ def create_handler(store, raw_root, static_root, auth_url):
                     self.send(200,health)
                 elif route == '/api/query':
                     sn,start,end = self.range_args(args)
-                    if not query_slots.acquire(blocking=False):
-                        self.send(429,{'error':'已有两个数据查询正在执行，请稍后重试'})
+                    if not self.acquire_query_slot('已有两个数据查询正在执行，请稍后重试'):
                         return
                     try:
                         self.send(200,store.query(sn,start,end,int(args.get('bins',700))))
@@ -153,8 +165,7 @@ def create_handler(store, raw_root, static_root, auth_url):
                     self.send(200,store.events(*self.range_args(args)))
                 elif route == '/api/quality':
                     sn,start,end = self.range_args(args)
-                    if not query_slots.acquire(blocking=False):
-                        self.send(429,{'error':'已有数据查询正在执行，请稍后重试'})
+                    if not self.acquire_query_slot('已有数据查询正在执行，请稍后重试'):
                         return
                     try:
                         self.send(200,store.quality_records(sn,start,end,args.get('reason','anomaly'),int(args.get('offset',0))))
@@ -185,8 +196,7 @@ def create_handler(store, raw_root, static_root, auth_url):
                     self.send(200,p)
                 elif route == '/api/export':
                     sn,start,end = self.range_args(args)
-                    if not query_slots.acquire(blocking=False):
-                        self.send(429,{'error':'已有数据查询或导出正在执行，请稍后重试'})
+                    if not self.acquire_query_slot('已有数据查询或导出正在执行，请稍后重试'):
                         return
                     try:
                         with store.connect() as c:
@@ -256,8 +266,7 @@ def create_handler(store, raw_root, static_root, auth_url):
                         return
                     if content_type not in ('text/csv','application/csv','application/gzip','application/x-gzip'):
                         raise ValueError('仅支持平台“导出有效数据”格式的 UTF-8 CSV 或 CSV.GZ')
-                    if not query_slots.acquire(blocking=False):
-                        self.send(429,{'error':'已有两个数据查询正在执行，请稍后重试'})
+                    if not self.acquire_query_slot('已有两个数据查询正在执行，请稍后重试'):
                         return
                     try:
                         mount_mode = args.get('mount','auto')
