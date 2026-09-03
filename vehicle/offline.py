@@ -3,6 +3,7 @@ import collections
 import csv
 import gzip
 import io
+import json
 import math
 import re
 import time
@@ -15,7 +16,7 @@ from . import quality
 
 EXPORT_FIELDS = (['device_id','t','protocol','week','tow'] + NUMERIC +
                  ['status_text','nav_mode','fix_mode','warning','source','source_offset','data_view',
-                  'filter_version','excluded_fields','filter_reasons','stationary_context'])
+                  'filter_version','excluded_fields','filter_reasons','stationary_context','ground_speed_json'])
 MAX_BYTES = 12 * 1024 * 1024 * 1024
 MAX_GZIP_BYTES = 1024 * 1024 * 1024
 MAX_ROWS = 30_000_000
@@ -118,6 +119,17 @@ def _point(row, line):
              q_version=version,q_context=(row['stationary_context'] or '').strip() or None,
              q_mask=sum(quality.BITS[key] for key in excluded),
              q_reasons=sum(quality.REASON_BITS[key] for key in reason_codes))
+    try:
+        estimate = json.loads(row['ground_speed_json'])
+        if (estimate['state'] not in ('moving','stationary','unknown') or
+                estimate['value'] != p['speed'] or
+                (estimate['state'] == 'moving' and (estimate['value'] is None or estimate['value'] <= 0)) or
+                (estimate['state'] == 'stationary' and estimate['value'] != 0) or
+                (estimate['state'] == 'unknown' and estimate['value'] is not None)):
+            raise ValueError()
+    except (ValueError, TypeError, KeyError):
+        raise ValueError(f'第 {line} 行可信地速元数据无效') from None
+    p['q_ground'] = estimate
     return p
 
 
@@ -261,7 +273,7 @@ def analyze_stream(source, byte_size, rule_resolver=None, mount_mode='auto', com
         rule_source=rule_source,rule_version=rules['version'],mount_confirmed=bool(mount_confirmed),
         persisted=False,limits=dict(max_bytes=limit,max_rows=MAX_ROWS,max_span_days=31))
     result['aggregation']['query_ms'] = round((time.perf_counter()-began)*1000,1)
-    result['aggregation']['method'] = f'离线有效数据按三轴合成峰值偏差（≤ {quality.MOTION_IMPACT_THRESHOLD_G:.3f} g 静止，> {quality.MOTION_IMPACT_THRESHOLD_G:.3f} g 运行）和时间桶计算；不补零、不插值；轨迹、区段和候选事件使用当前在线同口径算法'
+    result['aggregation']['method'] = '离线复用版本化可信地速与状态，不从已过滤数据重新估速；不补零、不插值；轨迹、区段和候选事件与在线同口径'
     return result
 
 

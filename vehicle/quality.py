@@ -1,9 +1,8 @@
 """Versioned, reversible measurement quarantine. Never mutates original points.
 
-v6 uses one deterministic tri-axis resultant threshold for motion state.  The
-only navigation quarantine is a conservative severe coordinate-jump check;
-initialization, heading readiness, low-speed course and static positions stay
-visible as evidence.
+v8 stores a causal, precision-gated ground-speed estimate separately from
+immutable navigation/IMU evidence. Low specific-force deviation alone never
+proves rest; invalid/unresolved navigation never becomes a fabricated zero.
 """
 import argparse
 import collections
@@ -16,25 +15,31 @@ import time
 
 from .protocol import NUMERIC
 from .rules import distance
+from . import ground_speed
 
-VERSION = 6
-# v6 deliberately has one motion rule.  A sample is stationary when the
-# resultant specific-force magnitude is within 0.01 g of the 1 g gravity
-# baseline; anything above the line is motion.  Navigation mode, heading
-# readiness and reported speed do not participate in this decision.
+VERSION = 8
+# The 0.01 g signal remains available for IMU diagnostics. Operational motion
+# state now comes from the versioned ground_speed estimate, not this signal.
 MOTION_IMPACT_THRESHOLD_G = 0.01
-MOTION_STRATEGY = 'tri_axis_peak_deviation'
+MOTION_STRATEGY = 'quality_gated_ground_speed'
 # Frozen manifests from earlier releases are retained for audit only.  They
-# must never become the active filter after the v6 migration.
+# must never become the active filter after the v8 migration.
 COMPATIBLE_PROFILE_VERSIONS = (1, 2, 3, 4, VERSION)
 MAX_VALID_VEHICLE_SPEED_KMH = 130.0
 MAX_VALID_VEHICLE_SPEED_MS = MAX_VALID_VEHICLE_SPEED_KMH / 3.6
+# A ground vehicle can have a small vertical velocity, but a satellite-only
+# solution reporting >18 km/h vertically is a navigation failure, not trolley
+# motion.  The velocity sigma gate catches the same failure before it reaches
+# the maximum-speed aggregation.
+MAX_VALID_VERTICAL_SPEED_KMH = 18.0
+MAX_VALID_VERTICAL_SPEED_MS = MAX_VALID_VERTICAL_SPEED_KMH / 3.6
+MAX_VALID_VELOCITY_STD_MS = 5.0
 BACKFILL_BATCH_SIZE = 20_000
 AUTO_ENTRY_POLICY = {
     'strategy': MOTION_STRATEGY,
     'threshold_g': MOTION_IMPACT_THRESHOLD_G,
-    'stationary': f'peak_deviation <= {MOTION_IMPACT_THRESHOLD_G:.3f} g',
-    'moving': f'peak_deviation > {MOTION_IMPACT_THRESHOLD_G:.3f} g',
+    'stationary': '2 s qualified low velocity + quiet IMU',
+    'moving': '0.5 s significant qualified horizontal velocity',
 }
 # Stored as a numeric sentinel to keep the existing SQLite schema/index.  API
 # callers see ``end: null`` and ``active: true`` instead of a year-9999 date.
@@ -42,6 +47,17 @@ OPEN_END = 253402300799.0
 AUTO_EXIT_POLICY = dict(AUTO_ENTRY_POLICY)
 BITS = {key: 1 << i for i, key in enumerate(NUMERIC)}
 ALL_FIELDS = sum(BITS.values())
+
+
+def policy_description():
+    """Return the human-readable policy shared by API and rollup responses."""
+    return (f'v{VERSION}：可信地速取 √(Ve²+Vn²)，V_2D 仅做同源一致性检查；'
+            '卫导/组合导航须通过速度标准差与连续性门控。持续 2 秒速度≤0.15 m/s、'
+            '水平速度标准差≤0.25 m/s、比力偏差≤0.01 g 且陀螺安静才判静止并归零；'
+            '初始化、纯惯导、低信噪比或异常解算留空，不计最高速度/里程。'
+            '不从坐标漂移计算速度；原始字段和 IMU 留档。')
+
+
 REASONS = {
     # These are retained as status evidence, not field-quarantine reasons.
     # Initialization, heading readiness and low-speed course must remain
@@ -49,12 +65,12 @@ REASONS = {
     'invalid_navigation': ('导航初始化 / 定位无效（保留显示）', 'status'),
     'heading_unavailable': ('定向未就绪（保留显示）', 'status'),
     'course_unavailable': ('静止或低速航迹角（保留显示）', 'status'),
-    # v6 retains stable reason names for the two field-level navigation
+    # v8 retains stable reason names for the two field-level navigation
     # quarantines; raw measurements remain untouched.
     'navigation_position_drift': ('显著位置漂移', 'anomaly'),
-    'navigation_velocity_outlier': ('导航速度解算超过车辆物理上限', 'anomaly'),
+    'navigation_velocity_outlier': ('导航速度解算失真（速度 / 垂向速度 / 不确定度）', 'anomaly'),
     # Kept as stable reason names so older clients can still parse an audit
-    # record; v6 no longer emits these legacy stationary-fit reasons.
+    # record; v8 no longer emits these legacy stationary-fit reasons.
     'stationary_position': ('历史规则：静止定位偏差', 'legacy'),
     'position_uncertainty': ('历史规则：水平定位不确定度超限', 'legacy'),
     'stationary_altitude': ('历史规则：静止高程离群', 'legacy'),
@@ -64,6 +80,7 @@ REASONS = {
     'stationary_gyro': ('历史规则：静止角速度离群', 'legacy'),
     'stationary_accel': ('历史规则：静止比力离群', 'legacy'),
     'stationary_attitude': ('历史规则：静止姿态离群', 'legacy'),
+    'speed_unavailable': ('可信地速证据不足 / 预热 / 解算不可靠', 'unavailable'),
 }
 REASON_BITS = {key: 1 << i for i, key in enumerate(REASONS)}
 ANOMALY_BITS = sum(REASON_BITS[k] for k, (_, kind) in REASONS.items() if kind == 'anomaly')
@@ -79,10 +96,16 @@ CREATE TABLE IF NOT EXISTS point_quality (
  version INTEGER NOT NULL, context_id TEXT, mask INTEGER NOT NULL, reasons INTEGER NOT NULL,
  motion_state TEXT NOT NULL DEFAULT 'unknown',
  PRIMARY KEY(device_id,t,protocol)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS point_ground_speed (
+ device_id TEXT NOT NULL, t REAL NOT NULL, protocol TEXT NOT NULL,
+ version INTEGER NOT NULL, estimate TEXT NOT NULL,
+ PRIMARY KEY(device_id,t,protocol)) WITHOUT ROWID;
 '''
 JOIN = '''SELECT p.*,q.version AS q_version,q.context_id AS q_context,
- q.mask AS q_mask,q.reasons AS q_reasons,q.motion_state AS q_motion_state FROM points p LEFT JOIN point_quality q
- ON q.device_id=p.device_id AND q.t=p.t AND q.protocol=p.protocol'''
+ q.mask AS q_mask,q.reasons AS q_reasons,q.motion_state AS q_motion_state,
+ g.estimate AS q_ground FROM points p LEFT JOIN point_quality q
+ ON q.device_id=p.device_id AND q.t=p.t AND q.protocol=p.protocol
+ LEFT JOIN point_ground_speed g ON g.device_id=p.device_id AND g.t=p.t AND g.protocol=p.protocol AND g.version=q.version'''
 
 
 def ensure_schema(c):
@@ -115,7 +138,7 @@ def contexts(c, sn=None, include_legacy=False):
     for row in rows:
         item = dict(row, profile=json.loads(row['profile']))
         # v1-v4 stationary facts remain queryable by an explicit audit, but
-        # cannot affect the v6 operational projection.  This prevents the old
+        # cannot affect the v8 operational projection.  This prevents the old
         # open context from turning all later running coordinates into static
         # residuals after the threshold migration.
         current = (item['profile'].get('strategy') == MOTION_STRATEGY and
@@ -146,7 +169,7 @@ def context_for(p, scopes):
 
 
 def automatic_exit_policy(context):
-    """Return the v6 threshold policy for API compatibility."""
+    """Return the v8 threshold policy for API compatibility."""
     return dict(AUTO_EXIT_POLICY)
 
 
@@ -214,7 +237,7 @@ def navigation_position_drift(previous, current):
 
 
 class AutomaticStationaryEntryDetector:
-    """Deprecated v4 lifecycle hook; v6 never opens inferred contexts."""
+    """Deprecated v4 lifecycle hook; v8 never opens inferred contexts."""
     def __init__(self):
         self.windows = {}
 
@@ -226,7 +249,7 @@ class AutomaticStationaryEntryDetector:
         # and historical decisions use motion_state() directly.
         return None
         # Legacy implementation retained below only for forensic source
-        # comparison; it is unreachable in v6.
+        # comparison; it is unreachable in v8.
         device_id = p['device_id']
         if context or p['t'] > time.time():
             self.forget(device_id)
@@ -299,7 +322,7 @@ class AutomaticStationaryEntryDetector:
 
 
 class ActiveStationaryExitDetector:
-    """Deprecated v4 lifecycle hook; v6 has no inferred exit lifecycle."""
+    """Deprecated v4 lifecycle hook; v8 has no inferred exit lifecycle."""
     def __init__(self):
         self.candidates = {}
 
@@ -311,7 +334,7 @@ class ActiveStationaryExitDetector:
     def observe(self, p, context):
         return None
         # Legacy implementation retained below only for forensic source
-        # comparison; it is unreachable in v6.
+        # comparison; it is unreachable in v8.
         if not context or context.get('kind') != 'confirmed_stationary_active' or not context.get('active'):
             return None
         policy = automatic_exit_policy(context)
@@ -439,37 +462,90 @@ def assess(p, context=None, explain=False, previous=None):
     horizontal_speed = None
     if p.get('ve') is not None and p.get('vn') is not None:
         horizontal_speed = math.hypot(p['ve'], p['vn'])
+    velocity_stds = [abs(p[key]) for key in ('ve_std', 'vn_std', 'vu_std')
+                     if isinstance(p.get(key), (int, float)) and math.isfinite(p[key])]
+    velocity_std = max(velocity_stds) if velocity_stds else None
+    vertical_outlier = p.get('vu') is not None and abs(p['vu']) > MAX_VALID_VERTICAL_SPEED_MS
+    uncertainty_outlier = velocity_std is not None and velocity_std > MAX_VALID_VELOCITY_STD_MS
+    drift = navigation_position_drift(previous, p)
     velocity_outlier = (
         (p.get('speed') is not None and p['speed'] > MAX_VALID_VEHICLE_SPEED_MS) or
         (horizontal_speed is not None and horizontal_speed > MAX_VALID_VEHICLE_SPEED_MS) or
-        (p.get('vu') is not None and abs(p['vu']) > MAX_VALID_VEHICLE_SPEED_MS)
+        (p.get('vu') is not None and abs(p['vu']) > MAX_VALID_VEHICLE_SPEED_MS) or
+        vertical_outlier or uncertainty_outlier
     )
     if velocity_outlier:
-        # The 2026-09-02 failure corrupted scalar, vector and vertical velocity
-        # together.  Quarantine the navigation solution fields, not the IMU or
-        # the immutable raw point, so maps and summaries cannot reuse it.
+        # A navigation solution can be badly wrong long before it reaches the
+        # broad 130 km/h vehicle cap.  Quarantine scalar/vector velocity and
+        # its coordinate for the effective view, but retain IMU, uncertainty
+        # evidence and the immutable raw point.
         reject('navigation_velocity_outlier',
                ['lat','lon','alt','speed','ve','vn','vu','course','course_std'],
-               dict(speed_ms=p.get('speed'),horizontal_speed_ms=horizontal_speed,vertical_speed_ms=p.get('vu')),
-               MAX_VALID_VEHICLE_SPEED_MS)
+               dict(speed_ms=p.get('speed'), horizontal_speed_ms=horizontal_speed,
+                    vertical_speed_ms=p.get('vu'), velocity_std_ms=velocity_std),
+               dict(max_speed_ms=MAX_VALID_VEHICLE_SPEED_MS,
+                    max_vertical_speed_ms=MAX_VALID_VERTICAL_SPEED_MS,
+                    max_velocity_std_ms=MAX_VALID_VELOCITY_STD_MS))
 
     # Do not replace or hide coordinates merely because a sample is static,
     # initialized, undirected, or low speed.  Only an impossible single-step
-    # jump is quarantined; this keeps normal running and accurate static GNSS
-    # positions available to the map and every parameter curve.
-    drift = navigation_position_drift(previous, p)
+    # jump or an internally inconsistent navigation solution is quarantined;
+    # this keeps normal running and accurate static GNSS positions available
+    # to the map and every parameter curve.
     if drift:
         reject('navigation_position_drift', ['lat', 'lon'], drift, drift['limit_m'])
     return mask, reasons, details
 
 
-def write_assessment(c, p, scopes, previous=None):
+def seed_estimator(c, p):
+    estimator = ground_speed.Estimator()
+    for row in c.execute('SELECT * FROM points WHERE device_id=? AND t>=? AND t<? ORDER BY t,protocol',
+                         (p['device_id'], p['t']-ground_speed.WINDOW_S, p['t'])):
+        estimator.observe(dict(row))
+    return estimator
+
+
+def ground_speed_details(row):
+    p = dict(row)
+    encoded = p.get('q_ground')
+    if not encoded:
+        return []
+    estimate = json.loads(encoded) if isinstance(encoded, str) else encoded
+    if estimate.get('value') is not None:
+        return []
+    labels = {
+        'missing_velocity_precision':'缺少完整速度标准差',
+        'navigation_unavailable':'导航未就绪或纯惯导不可确认',
+        'velocity_uncertain':'水平速度标准差超过 0.5 m/s',
+        'velocity_fields_disagree':'V_2D 与东/北向速度不一致',
+        'velocity_solution_outlier':'水平或垂向速度解算异常',
+        'motion_unresolved':'速度不足以区分低速运动与噪声，且未满足持续静止条件',
+        'warming_up':'尚未满足连续 0.5 秒可信运动证据',
+        'velocity_jump':'短窗水平速度向量跳变',
+    }
+    return [dict(code='speed_unavailable', label=labels.get(estimate['reason'], '地速证据不足'),
+                 category='unavailable', fields=['speed'], values={'speed':p.get('speed')},
+                 reference=estimate, limit=None)]
+
+
+def write_assessment(c, p, scopes, previous=None, estimator=None):
     context = context_for(p, scopes)
     mask, reasons, _ = assess(p, context, previous=previous)
-    state = motion_state(p)
+    estimate = (estimator or seed_estimator(c, p)).observe(p)
+    # Field quarantine and the derived projection must never disagree: a
+    # stricter navigation-level gate cannot be resurrected by ground speed.
+    if mask & BITS['speed']:
+        estimate.update(value=None, state='unknown', reason='velocity_solution_outlier')
+    if estimate['value'] is None:
+        mask |= BITS['speed']
+        reasons |= REASON_BITS['speed_unavailable']
+    state = estimate['state']
     c.execute('INSERT OR REPLACE INTO point_quality VALUES (?,?,?,?,?,?,?,?)',
               (p['device_id'],p['t'],p['protocol'],VERSION,context['id'] if context else None,mask,reasons,state))
-    return mask, reasons, context['id'] if context else None
+    encoded = json.dumps(estimate, separators=(',', ':'), allow_nan=False)
+    c.execute('INSERT OR REPLACE INTO point_ground_speed VALUES (?,?,?,?,?)',
+              (p['device_id'],p['t'],p['protocol'],VERSION,encoded))
+    return mask, reasons, context['id'] if context else None, encoded
 
 
 def project(row, info=False):
@@ -483,20 +559,25 @@ def project(row, info=False):
         p[key] = None
     p['valid_pos'] = int(bool(p['valid_pos'] and p['lat'] is not None and p['lon'] is not None))
     p['stationary_context'] = p.get('q_context') if not pending else None
-    p['motion_state'] = (p.get('q_motion_state') if not pending else None) or motion_state(p)
+    estimate = p.get('q_ground')
+    estimate = json.loads(estimate) if isinstance(estimate, str) else estimate
+    if pending or not estimate:
+        estimate = dict(value=None, state='unknown', reason='assessment_pending', sigma_ms=None,
+                        source='unavailable', window_s=0)
+    p['ground_speed'] = estimate
+    p['motion_state'] = estimate['state']
     # Vehicle speed follows the motion decision, not GNSS velocity residuals
     # or displacement of retained static positions.  Normalize before any
     # consumer (curves, rollups, replay, exports, or event rules) sees it.
     # The input row and raw evidence remain untouched; unknown/pending motion
     # must never be turned into a fabricated zero.
-    if not pending and p['motion_state'] == 'stationary':
-        p['speed'] = 0.0
+    p['speed'] = estimate['value']
     if info:
         p['quality'] = dict(version=VERSION, pending=pending, excluded_fields=fields,
                             reasons=[dict(code=k,label=label,category=kind) for k,(label,kind) in REASONS.items() if reasons & REASON_BITS[k]],
                             context_id=p['stationary_context'], motion_state=p['motion_state'],
                             motion_threshold_g=MOTION_IMPACT_THRESHOLD_G)
-    for key in ('q_version','q_context','q_mask','q_reasons','q_motion_state'):
+    for key in ('q_version','q_context','q_mask','q_reasons','q_motion_state','q_ground'):
         p.pop(key, None)
     return p
 
@@ -535,7 +616,7 @@ def build_context(c, sn, start, end, provenance):
                    horizontal_limit_ms=max(limits[k] for k in ('speed','ve','vn')),
                    radial_median_m=radial_median,radial_mad_m=radial_mad,
                    population=count,valid_population=population,training_samples=len(radii),stride=stride,
-                   method='v6 tri-axis peak-deviation state; legacy fitted profile retained for audit only',
+                   method='v8 tri-axis peak-deviation state plus navigation consistency quarantine; legacy fitted profile retained for audit only',
                    strategy=MOTION_STRATEGY, motion_threshold_g=MOTION_IMPACT_THRESHOLD_G, version=VERSION)
     scope = dict(device_id=sn,start=start,end=end,kind='confirmed_stationary',profile=profile,provenance=provenance)
     scope['id'] = hashlib.sha256(json.dumps(scope,sort_keys=True).encode()).hexdigest()[:20]
@@ -650,7 +731,16 @@ def auto_close_active_context(c, context_id, end, evidence):
     )
 
 
-def backfill(store):
+def previous_point(c, p):
+    """Seek the composite primary key; an OR predicate scans the device tail."""
+    row = c.execute(
+        'SELECT * FROM points WHERE device_id=? AND (t,protocol)<(?,?) '
+        'ORDER BY t DESC,protocol DESC LIMIT 1',
+        (p['device_id'], p['t'], p['protocol'])).fetchone()
+    return dict(row) if row else None
+
+
+def backfill(store, progress=None):
     """Reassess rows in ordered, restartable batches.
 
     The previous raw sample is carried into each assessment so the only
@@ -658,35 +748,39 @@ def backfill(store):
     during the historical replay as it is during live ingestion.
     """
     written = 0
-    previous_by_device = {}
+    cursor = None
+    estimators = {}
     with store.ingestion_lock():
         while True:
             with store.connect() as c:
                 scopes = contexts(c)
-                rows = c.execute(JOIN+' WHERE q.version IS NULL OR q.version!=? '
-                                  'ORDER BY p.device_id,p.t,p.protocol LIMIT ?',
-                                  (VERSION, BACKFILL_BATCH_SIZE)).fetchall()
+                after = ' AND (p.device_id,p.t,p.protocol)>(?,?,?)' if cursor else ''
+                rows = c.execute(JOIN+' WHERE (q.version IS NULL OR q.version!=? OR g.estimate IS NULL)'
+                                  +after+' ORDER BY p.device_id,p.t,p.protocol LIMIT ?',
+                                  (VERSION, *(cursor or ()), BACKFILL_BATCH_SIZE)).fetchall()
                 if not rows:
                     break
                 for row in rows:
                     item = dict(row)
-                    previous = previous_by_device.get(item['device_id'])
-                    if previous is None:
-                        previous = c.execute(
-                            'SELECT * FROM points WHERE device_id=? AND '
-                            '(t<? OR (t=? AND protocol<?)) ORDER BY t DESC,protocol DESC LIMIT 1',
-                            (item['device_id'], item['t'], item['t'], item['protocol'])).fetchone()
-                        previous = dict(previous) if previous else None
-                    write_assessment(c, item, scopes, previous=previous)
-                    previous_by_device[item['device_id']] = {
-                        key: item.get(key) for key in item
-                        if key not in ('q_version','q_context','q_mask','q_reasons','q_motion_state')
-                    }
-                written += len(rows)
+                    # Missing quality rows may be sparse after a repair. Seed
+                    # from the actual raw predecessor, not the last repaired row.
+                    previous = previous_point(c, item)
+                    estimator = estimators.get(item['device_id'])
+                    if estimator is None or (previous and estimator.window and previous['t'] != estimator.window[-1]['t']):
+                        estimator = seed_estimator(c, item)
+                        estimators[item['device_id']] = estimator
+                    write_assessment(c, item, scopes, previous=previous, estimator=estimator)
+            # Only advance/report after the batch transaction has committed.
+            cursor = tuple(rows[-1][key] for key in ('device_id','t','protocol'))
+            written += len(rows)
+            if progress:
+                progress(dict(stage='quality', assessed=written, cursor=cursor))
     if written:
         # Rollups are derived from the filtered projection.  Any reassessment
         # invalidates them, so rebuild from authoritative raw points once after
         # the restartable backfill completes.
+        if progress:
+            progress(dict(stage='rollups', assessed=written))
         store.rebuild_rollups()
     return written
 

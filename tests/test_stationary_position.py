@@ -1,6 +1,7 @@
 """Regression: a stationary interval must render at one actual position."""
 import unittest
 import math
+import json
 
 import test_vehicle as fixtures
 from vehicle.protocol import parse
@@ -9,7 +10,20 @@ from vehicle.protocol import parse
 class StationaryPositionTests(unittest.TestCase):
     setUp = fixtures.StoreTests.setUp
     tearDown = fixtures.StoreTests.tearDown
-    ingest = fixtures.StoreTests.ingest
+    def ingest(self, *frames):
+        # Anchor unit tests take independently confirmed motion labels. The
+        # estimator's end-to-end static/moving tests live in test_ground_speed.
+        fixtures.StoreTests.ingest(self, *frames)
+        with self.store.connect() as c:
+            for frame in frames:
+                p = parse(frame)
+                stationary = p['ax'] == 1
+                value = 0 if stationary else p['speed']
+                estimate = dict(value=value, state='stationary' if stationary else 'moving',
+                                reason='test_confirmed_label', sigma_ms=.02, source='test', window_s=2)
+                c.execute('UPDATE point_ground_speed SET estimate=? WHERE device_id=? AND t=? AND protocol=?',
+                          (json.dumps(estimate), p['device_id'], p['t'], p['protocol']))
+        self.store.rebuild_rollups()
 
     def test_stationary_drift_is_replaced_by_high_confidence_position_in_track(self):
         point = parse(fixtures.LIVE[0])

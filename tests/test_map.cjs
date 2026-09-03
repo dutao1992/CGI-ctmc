@@ -108,7 +108,7 @@ test('actual application converts routes, endpoints, events, playback, chart and
   calls.charts.get('click')({seriesType:'line',value:[101000,0]});near(calls.pans.at(-1),CTMCMap.latLng(track[1]));
   await mapTest.locateEvent(1);near(calls.centers.at(-1),CTMCMap.latLng(point));near(calls.moves.at(-1),CTMCMap.latLng(point));
   assert.equal(JSON.stringify(track),original);
-  // v6 keeps measured positions in both static and running periods.
+  // v7 keeps measured positions in both static and running periods.
   const anchor={lat:31.2456,lon:121.616},staticTrack=track.map(p=>({...p,motion_state:'stationary',speed:null}));
   mapTest.setData({...data,track:staticTrack,quality:{contexts:[]}});
   mapTest.renderMap();
@@ -162,9 +162,9 @@ test('overview vibration uses the selected range, links the speed axis and keeps
   assert.equal(time.series[0].data[0][1],.011);assert.equal(time.series[1].data[0][1],.02);
   assert.equal(time.tooltip.renderMode,'html');assert.equal(time.tooltip.confine,true);assert.equal(time.tooltip.axisPointer.type,'line');
   const signalTooltip=time.tooltip.formatter([{value:[h.app.state.data.start*1000,.011],dataIndex:0}]);
-  assert.match(signalTooltip,/车辆速度：/);assert.match(signalTooltip,/振动 RMS：/);assert.match(signalTooltip,/振动峰值偏差：/);assert.match(signalTooltip,/振动有效值：3 点/);
+  assert.match(signalTooltip,/可信地速：/);assert.match(signalTooltip,/振动 RMS：/);assert.match(signalTooltip,/振动峰值偏差：/);assert.match(signalTooltip,/振动有效值：3 点/);
   const speedTooltip=speed.tooltip.formatter([{value:[h.app.state.data.start*1000,.1],dataIndex:0}]);
-  assert.equal(speed.tooltip.renderMode,'html');assert.equal(speed.tooltip.confine,true);assert.match(speedTooltip,/车辆速度：/);assert.match(speedTooltip,/振动 RMS：/);assert.equal(speed.xAxis.min,time.xAxis.min);assert.equal(speed.xAxis.max,time.xAxis.max);
+  assert.equal(speed.tooltip.renderMode,'html');assert.equal(speed.tooltip.confine,true);assert.match(speedTooltip,/可信地速：/);assert.match(speedTooltip,/振动 RMS：/);assert.equal(speed.xAxis.min,time.xAxis.min);assert.equal(speed.xAxis.max,time.xAxis.max);
   assert.deepEqual(spectrum.series[0].data,[[1,.01],[2,.03]]);assert.equal(spectrum.xAxis.max,4);
   assert.match(h.node('overviewVibrationNote').textContent,/动态 RMS 最大的连续 60 秒窗/);assert.deepEqual(h.calls.connections,['overview-speed-vibration']);
   h.app.setView('signals');
@@ -180,7 +180,7 @@ test('overview and inertial curves draw dashed alarm thresholds for direct chann
   const h=await appHarness(),params=new URLSearchParams({start:'100',end:'200',device:'SN1'}),rules={version:1,speed_kmh:80,age_s:10,roll_deg:15,pitch_deg:12,position_std_m:2,shock_g:.5},data=queryFixture(params);
   data.quality.excluded_fields={lat:2,lon:3};h.app.setData(data);h.app.state.device={id:'SN1',rules,mount_confirmed:true};
   h.app.renderOverview();
-  const speed=h.calls.options.get('speedChart'),speedLine=speed.series.find(s=>s.name==='车辆速度');
+  const speed=h.calls.options.get('speedChart'),speedLine=speed.series.find(s=>s.name==='可信地速');
   assert.equal(speedLine.markLine.lineStyle.type,'dashed');assert.equal(speedLine.markLine.data[0].yAxis,80);
   const overviewVibration=h.calls.options.get('overviewVibrationTimeChart');
   assert.equal(overviewVibration.series[1].markLine.lineStyle.type,'dashed');assert.deepEqual(Array.from(overviewVibration.series[1].markLine.data,map=>map.yAxis),[.01,.8]);
@@ -227,7 +227,7 @@ test('quality page labels legacy stationary records as audit-only',async()=>{
   }]}});
   h.app.renderFilterSummary();
   assert.match(h.node('filterSummary').innerHTML,/历史静止记录（仅审计）/);
-  assert.match(h.node('filterSummary').innerHTML,/v6 已改用三轴峰值偏差判定/);
+  assert.match(h.node('filterSummary').innerHTML,/v8 使用可信速度与持续安静联合判定/);
 });
 
 test('quality page distinguishes historical replay from user-confirmed stationary facts',async()=>{
@@ -239,7 +239,7 @@ test('quality page distinguishes historical replay from user-confirmed stationar
   }]}});
   h.app.renderFilterSummary();
   assert.match(h.node('filterSummary').innerHTML,/历史静止记录（仅审计）/);
-  assert.match(h.node('filterSummary').innerHTML,/旧静止上下文不再屏蔽/);
+  assert.match(h.node('filterSummary').innerHTML,/旧静止上下文仅作审计/);
 });
 
 const settle=()=>new Promise(resolve=>setImmediate(resolve));

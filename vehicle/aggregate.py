@@ -166,7 +166,7 @@ class RollupBuilder:
         self.fix_counts[str(p['fix_mode'])] += 1
         # Confirmed stationary samples contribute zero even without a valid
         # position. Moving speeds still require a valid navigation solution.
-        if p['speed'] is not None and (p['valid_pos'] or _motion_state(p) == 'stationary'):
+        if p['speed'] is not None:
             self.max_speed = max(self.max_speed or 0,p['speed']*3.6)
         for metric in METRICS:
             value = p[metric]
@@ -481,7 +481,7 @@ class QueryCombiner:
                     unavailable_samples=unavailable,status_samples=status,pending_samples=pending,excluded_fields=dict(field_counts),
                     reasons=[dict(code=k,label=label,category=kind,count=reason_counts[k]) for k,(label,kind) in quality.REASONS.items()],
                     contexts=scopes,
-                    policy=f'运动/静止仅按三轴合成峰值偏差 |√(ax²+ay²+az²)-1|：≤ {quality.MOTION_IMPACT_THRESHOLD_G:.3f} g 为静止，> {quality.MOTION_IMPACT_THRESHOLD_G:.3f} g 为运行；导航初始化、定向未就绪、静止或低速航迹角只提示不剔除。仅隔离超过 {quality.MAX_VALID_VEHICLE_SPEED_KMH:.0f} km/h 的失真导航解和明显位置跳点，原始值保留')
+                    policy=quality.policy_description())
 
     def finish(self, contexts, source, source_resolution_s, elapsed_ms):
         series = {key:[] for key in METRICS}
@@ -571,13 +571,15 @@ class QueryCombiner:
                          covered_s=self.covered,max_kmh=self.max_speed,fixed_pct=100*self.fixed/self.count if self.count else 0,
                          valid_pct=100*self.valid/self.count if self.count else 0,gap_count=len(self.gaps),
                          track_points=len(track),
+                         speed_samples=sum(g['values']['speed'][3] for g in self.groups.values()),
+                         speed_coverage_pct=100*sum(g['values']['speed'][3] for g in self.groups.values())/self.count if self.count else 0,
                          fix_counts=dict(self.fix_counts),sample_hz=(self.count-1)/span if span else 0),
                     aggregation=dict(buckets=len(self.groups),bucket_s=(self.end-self.start)/self.bins,
                                      source=source,source_resolution_s=source_resolution_s,query_ms=round(elapsed_ms,1),cache_hit=False,
                                      track_points=len(track),track_limit=TRACK_LIMIT,track_truncated=self.track_truncated or len(self.track)>TRACK_LIMIT,
-                    method=f'先按 v{quality.VERSION} 三轴合成峰值偏差（|√(ax²+ay²+az²)-1| > {quality.MOTION_IMPACT_THRESHOLD_G:.3f} g）判定运动/静止，再隔离超过车辆物理上限或明显跳点的导航字段；不插值；长窗口分层读取可重建的 60 秒或 10 分钟聚合，首尾读取原始采样',
+                    method=quality.policy_description()+' 长窗口分层读取可重建的 60 秒或 10 分钟聚合，首尾读取原始采样。',
                                      timezone='Asia/Shanghai',coordinates='WGS84 原始坐标；前端高德底图单独转换为 GCJ-02 展示',
-                                     mileage='有效定位且连续速度≥3.6 km/h 时的速度梯形积分；缺测不外推，非 CAN 里程'))
+                                     mileage='可信运动且定位连续时的地速梯形积分；缺测不外推，不是轮速/CAN 里程'))
 
 
 def encode(snapshot):

@@ -14,18 +14,21 @@ class StationarySpeedTests(unittest.TestCase):
         point = parse(fixtures.LIVE[0])
         start = int(point['t'] // 600) * 600
         tow = point['tow'] + start + 100 - point['t']
-        frames = [fixtures.altered(
+        frames = [fixtures.navigation_frame(
             tow=tow+i, status='42', ax=1, ay=0, az=0,
             speed=speed/3.6, ve=speed/3.6, vn=0, vu=0,
             lat=point['lat']+i*.000001, lon=point['lon'],
-        ) for i, speed in enumerate((.04, 2.06, 10.73))]
-        self.ingest(*frames)
+        ) for i, speed in enumerate((.04, .06, .08))]
+        # Establish the static fact using the preceding raw window. A 10.73
+        # km/h residual alone is no longer labelled static from quiet IMU.
+        self.ingest(*[fixtures.navigation_frame(tow=tow-2+i/10,status='42',
+                                                ax=1,speed=.01) for i in range(20)], *frames)
 
         for span, source, resolution in ((300, 'raw', 0),
                                           (21600, 'rollup', 60),
                                           (172800, 'rollup', 600)):
             with self.subTest(source=source, resolution_s=resolution):
-                result = self.store.query(point['device_id'], start, start+span, bins=50)
+                result = self.store.query(point['device_id'], start+100, start+100+span, bins=50)
                 self.assertEqual(result['total'], 3)
                 self.assertEqual(result['aggregation']['source'], source)
                 self.assertEqual(result['aggregation']['source_resolution_s'], resolution)

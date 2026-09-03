@@ -209,6 +209,7 @@ def create_handler(store, raw_root, static_root, auth_url):
                             if raw_view:
                                 reason = args.get('reason','anomaly')
                                 choices = dict(quality.REASON_BITS,anomaly=quality.ANOMALY_BITS,unavailable=quality.UNAVAILABLE_BITS,all=quality.ANOMALY_BITS|quality.UNAVAILABLE_BITS)
+                                choices.update({k:0 for k,(_,kind) in quality.REASONS.items() if kind == 'status'})
                                 if reason not in choices: raise ValueError('未知过滤原因')
                                 suffix += ' AND q.version=? AND q.mask!=0 AND (q.reasons & ?)!=0'
                                 params.extend([quality.VERSION,choices[reason]])
@@ -226,7 +227,8 @@ def create_handler(store, raw_root, static_root, auth_url):
                                 p.update(data_view='excluded_raw' if raw_view else 'filtered',filter_version=quality.VERSION,
                                          excluded_fields='|'.join(clean['quality']['excluded_fields']),
                                          filter_reasons='|'.join(x['code'] for x in clean['quality']['reasons']),
-                                         stationary_context=clean['stationary_context'])
+                                         stationary_context=clean['stationary_context'],
+                                         ground_speed_json=json.dumps(clean['ground_speed'],separators=(',',':')))
                                 values = [p[k] for k in fields]
                                 writer.writerow(["'"+v if isinstance(v,str) and v[:1] in ('=','+','-','@','\t','\r') else v for v in values])
                         filename = 'cgi-excluded-evidence.csv' if raw_view else 'cgi-filtered-telemetry.csv'

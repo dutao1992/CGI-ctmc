@@ -406,13 +406,14 @@ class Store:
                     unavailable_samples=unavailable,status_samples=status,pending_samples=pending,excluded_fields=dict(field_counts),
                     reasons=[dict(code=k,label=label,category=kind,count=reason_counts[k]) for k,(label,kind) in quality.REASONS.items()],
                     contexts=scopes,
-                    policy=f'运动/静止仅按三轴合成峰值偏差 |√(ax²+ay²+az²)-1|：≤ {quality.MOTION_IMPACT_THRESHOLD_G:.3f} g 为静止，> {quality.MOTION_IMPACT_THRESHOLD_G:.3f} g 为运行；导航初始化、定向未就绪、静止或低速航迹角只提示不剔除。仅隔离超过 {quality.MAX_VALID_VEHICLE_SPEED_KMH:.0f} km/h 的失真导航解和明显位置跳点，原始值保留')
+                    policy=quality.policy_description())
 
     def quality_records(self, sn, start, end, reason='anomaly', offset=0, limit=50):
         if reason == 'anomaly': bits = quality.ANOMALY_BITS
         elif reason == 'unavailable': bits = quality.UNAVAILABLE_BITS
         elif reason == 'all': bits = quality.ANOMALY_BITS | quality.UNAVAILABLE_BITS
-        elif reason in quality.REASON_BITS: bits = quality.REASON_BITS[reason]
+        elif reason in quality.REASON_BITS:
+            bits = quality.REASON_BITS[reason] if quality.REASONS[reason][1] != 'status' else 0
         else: raise ValueError('未知过滤原因')
         offset = max(0,min(1_000_000,int(offset))); limit = max(1,min(100,int(limit)))
         args = (sn,start,end,bits)
@@ -428,12 +429,10 @@ class Store:
             for row in rows:
                 p = dict(row)
                 context = quality.context_for(p,scopes)
-                previous = detail_connection.execute(
-                    'SELECT * FROM points WHERE device_id=? AND '
-                    '(t<? OR (t=? AND protocol<?)) ORDER BY t DESC,protocol DESC LIMIT 1',
-                    (p['device_id'],p['t'],p['t'],p['protocol'])).fetchone()
+                previous = quality.previous_point(detail_connection, p)
                 _, _, details = quality.assess(p,context,explain=True,
                                                previous=dict(previous) if previous else None)
+                details.extend(quality.ground_speed_details(p))
                 items.append(dict(device_id=sn,t=p['t'],protocol=p['protocol'],version=p['q_version'],context_id=p['q_context'],
                                   details=details,raw_values={k:p[k] for k in quality.BITS if p['q_mask'] & quality.BITS[k]},
                                   source=p['source'],source_offset=p['source_offset']))
@@ -447,15 +446,14 @@ class Store:
             p = quality.project(row,info=True)
             if raw:
                 original = dict(row)
-                for key in ('q_version','q_context','q_mask','q_reasons','q_motion_state'): original.pop(key,None)
+                for key in ('q_version','q_context','q_mask','q_reasons','q_motion_state','q_ground'): original.pop(key,None)
                 original['quality'] = p['quality']
-                previous = c.execute(
-                    'SELECT * FROM points WHERE device_id=? AND '
-                    '(t<? OR (t=? AND protocol<?)) ORDER BY t DESC,protocol DESC LIMIT 1',
-                    (sn,original['t'],original['t'],original['protocol'])).fetchone()
+                previous = quality.previous_point(c, original)
                 original['quality']['details'] = quality.assess(
                     original, quality.context_for(original,quality.contexts(c,sn)), True,
                     dict(previous) if previous else None)[2]
+                original['quality']['details'].extend(quality.ground_speed_details(row))
+                original['ground_speed'] = p['ground_speed']
                 original['filtered_values'] = {k:p[k] for k in NUMERIC}
                 original['data_view'] = 'raw_evidence'
                 return describe(original)
@@ -649,10 +647,7 @@ class Ingestor:
         # Read the preceding immutable sample before inserting the current
         # one.  It is used only for the conservative severe-jump check; the
         # tri-axis motion state itself is independent of navigation fields.
-        previous = c.execute(
-            'SELECT * FROM points WHERE device_id=? AND '
-            '(t<? OR (t=? AND protocol<?)) ORDER BY t DESC,protocol DESC LIMIT 1',
-            (sn, p['t'], p['t'], p['protocol'])).fetchone()
+        previous = quality.previous_point(c, p)
         keys = list(p)
         result = c.execute(f'INSERT OR IGNORE INTO points ({",".join(keys)}) VALUES ({",".join("?" for _ in keys)})',list(p.values()))
         if not result.rowcount:
@@ -662,9 +657,17 @@ class Ingestor:
         # Lifecycle contexts from v1-v4 are audit records only.  The current
         # rule is evaluated point-by-point and never opens a speed/position
         # based stationary context.
-        mask, reasons, context_id = quality.write_assessment(
+        mask, reasons, context_id, estimate = quality.write_assessment(
             c, p, self.quality_contexts, previous=dict(previous) if previous else None)
-        p = quality.project(dict(p,q_version=quality.VERSION,q_mask=mask,q_reasons=reasons,q_context=context_id))
+        p = quality.project(dict(p,q_version=quality.VERSION,q_mask=mask,q_reasons=reasons,q_context=context_id,q_ground=estimate))
+        # A late sample can change only the following 2 s of causal estimates.
+        if late:
+            for future in c.execute('SELECT * FROM points WHERE device_id=? AND t>? AND t<=? ORDER BY t,protocol',
+                                    (sn, p['t'], p['t']+quality.ground_speed.WINDOW_S)).fetchall():
+                future = dict(future)
+                prior = c.execute('SELECT * FROM points WHERE device_id=? AND t<? ORDER BY t DESC LIMIT 1',
+                                  (sn, future['t'])).fetchone()
+                quality.write_assessment(c, future, self.quality_contexts, previous=dict(prior) if prior else None)
         if sn not in self.states or self.states[sn]['version'] != rules['version']:
             prev = c.execute(quality.JOIN+' WHERE p.device_id=? AND p.t<? ORDER BY p.t DESC LIMIT 1',(sn,p['t'])).fetchone()
             self.states[sn] = {'prev':quality.project(prev) if prev else None,'history':collections.deque(), 'active':{},'version':rules['version']}
@@ -753,6 +756,7 @@ class Ingestor:
                             if inserted:
                                 inserted_total += 1
                                 touched[p['device_id']].add(bucket_start(p['t']))
+                                touched[p['device_id']].add(bucket_start(p['t']+quality.ground_speed.WINDOW_S))
                         else:
                             counts['auxiliary_ascii'] += 1
                     except (ValueError,IndexError,OverflowError) as e:

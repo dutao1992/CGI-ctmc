@@ -209,6 +209,7 @@ class Retention:
                     for row in rows:
                         rollup_buckets[row['device_id']].add(int(row['t']//60*60))
                     c.executemany('DELETE FROM point_quality WHERE device_id=? AND t=? AND protocol=?', [tuple(r) for r in rows])
+                    c.executemany('DELETE FROM point_ground_speed WHERE device_id=? AND t=? AND protocol=?', [tuple(r) for r in rows])
                     c.executemany('DELETE FROM points WHERE device_id=? AND t=? AND protocol=?', [tuple(r) for r in rows])
                     for sn,starts in rollup_buckets.items():
                         self.store.rebuild_rollup_buckets(c,sn,starts)
