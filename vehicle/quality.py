@@ -17,14 +17,14 @@ from .protocol import NUMERIC
 from .rules import distance
 from . import ground_speed
 
-VERSION = 8
+VERSION = 9
 # The 0.01 g signal remains available for IMU diagnostics. Operational motion
 # state now comes from the versioned ground_speed estimate, not this signal.
 MOTION_IMPACT_THRESHOLD_G = 0.01
 MOTION_STRATEGY = 'quality_gated_ground_speed'
 # Frozen manifests from earlier releases are retained for audit only.  They
 # must never become the active filter after the v8 migration.
-COMPATIBLE_PROFILE_VERSIONS = (1, 2, 3, 4, VERSION)
+COMPATIBLE_PROFILE_VERSIONS = (1, 2, 3, 4, 8, VERSION)
 MAX_VALID_VEHICLE_SPEED_KMH = 130.0
 MAX_VALID_VEHICLE_SPEED_MS = MAX_VALID_VEHICLE_SPEED_KMH / 3.6
 # A ground vehicle can have a small vertical velocity, but a satellite-only
@@ -54,7 +54,8 @@ def policy_description():
     return (f'v{VERSION}：可信地速取 √(Ve²+Vn²)，V_2D 仅做同源一致性检查；'
             '卫导/组合导航须通过速度标准差与连续性门控。持续 2 秒速度≤0.15 m/s、'
             '水平速度标准差≤0.25 m/s、比力偏差≤0.01 g 且陀螺安静才判静止并归零；'
-            '初始化、纯惯导、低信噪比或异常解算留空，不计最高速度/里程。'
+            '初始化、纯惯导或异常解算留空；质量合格的低信噪比连续窗可显示独立参考地速，'
+            '参考值不判运动、不计最高速度/里程/告警，误差包络不是经标定的置信区间。'
             '不从坐标漂移计算速度；原始字段和 IMU 留档。')
 
 
@@ -536,6 +537,7 @@ def write_assessment(c, p, scopes, previous=None, estimator=None):
     # stricter navigation-level gate cannot be resurrected by ground speed.
     if mask & BITS['speed']:
         estimate.update(value=None, state='unknown', reason='velocity_solution_outlier')
+        estimate.pop('reference', None)
     if estimate['value'] is None:
         mask |= BITS['speed']
         reasons |= REASON_BITS['speed_unavailable']
@@ -572,6 +574,10 @@ def project(row, info=False):
     # The input row and raw evidence remain untouched; unknown/pending motion
     # must never be turned into a fabricated zero.
     p['speed'] = estimate['value']
+    reference = (estimate.get('reference') or {}) if ground_speed.valid_reference(estimate) else {}
+    p['speed_reference'] = reference.get('value')
+    p['speed_reference_low'] = reference.get('lower_ms')
+    p['speed_reference_high'] = reference.get('upper_ms')
     if info:
         p['quality'] = dict(version=VERSION, pending=pending, excluded_fields=fields,
                             reasons=[dict(code=k,label=label,category=kind) for k,(label,kind) in REASONS.items() if reasons & REASON_BITS[k]],

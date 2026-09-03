@@ -12,6 +12,7 @@ from .aggregate import QueryCombiner, RollupBuilder
 from .protocol import NUMERIC, gps_to_unix
 from .rules import DEFAULTS, LABELS, conditions
 from . import quality
+from .ground_speed import valid_reference
 
 
 EXPORT_FIELDS = (['device_id','t','protocol','week','tow'] + NUMERIC +
@@ -125,7 +126,9 @@ def _point(row, line):
                 estimate['value'] != p['speed'] or
                 (estimate['state'] == 'moving' and (estimate['value'] is None or estimate['value'] <= 0)) or
                 (estimate['state'] == 'stationary' and estimate['value'] != 0) or
-                (estimate['state'] == 'unknown' and estimate['value'] is not None)):
+                (estimate['state'] == 'unknown' and estimate['value'] is not None) or
+                not valid_reference(estimate) or
+                (estimate.get('reference') is not None and (p['nav_mode'] not in (1,2) or not p['valid_pos']))):
             raise ValueError()
     except (ValueError, TypeError, KeyError):
         raise ValueError(f'第 {line} 行可信地速元数据无效') from None

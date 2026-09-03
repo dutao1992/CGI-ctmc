@@ -15,6 +15,10 @@ REST_SPEED_MS = .15
 REST_SIGMA_MS = .25
 QUIET_G = .01
 MAX_SPEED_MS = 130 / 3.6
+REFERENCE_MIN_S = 1.0
+REFERENCE_MAX_GAP_S = .3
+REFERENCE_MAX_DISPERSION_MS = .25
+REFERENCE_METHOD = 'causal_vector_median_v1'
 
 
 def finite(value):
@@ -48,6 +52,25 @@ def quiet(p):
             and math.sqrt(sum(p[k]**2 for k in ('gx','gy','gz'))) <= 1.)
 
 
+def valid_reference(estimate):
+    """Validate the display contract, including untrusted imported CSV JSON."""
+    ref = estimate.get('reference')
+    if ref is None:
+        return True
+    if (not isinstance(ref, dict) or estimate.get('value') is not None or
+            estimate.get('state') != 'unknown' or
+            estimate.get('reason') not in ('motion_unresolved', 'warming_up')):
+        return False
+    if not all(finite(ref.get(k)) and not isinstance(ref[k], bool) for k in
+               ('value', 'sigma_ms', 'lower_ms', 'upper_ms', 'window_s', 'samples')):
+        return False
+    return (ref.get('method') == REFERENCE_METHOD and 0 <= ref['value'] <= MAX_SPEED_MS and
+            0 <= ref['sigma_ms'] <= MAX_SIGMA_MS and REFERENCE_MIN_S <= ref['window_s'] <= WINDOW_S and
+            ref['samples'] >= 5 and ref['samples'] == int(ref['samples']) and
+            math.isclose(ref['lower_ms'], max(0., ref['value']-3*ref['sigma_ms']), abs_tol=1e-9) and
+            math.isclose(ref['upper_ms'], ref['value']+3*ref['sigma_ms'], abs_tol=1e-9))
+
+
 class Estimator:
     """Only the preceding 2 s of raw data matter; restart seeds that window.
 
@@ -58,6 +81,40 @@ class Estimator:
         self.window = deque()
 
     def observe(self, p):
+        result = self._observe_trusted(p)
+        # A reference is a display-only estimate, never evidence of motion.
+        # The two channels share a navigation solution, so do not average them
+        # or claim independent-sensor precision gains.
+        if result['value'] is not None or result['reason'] not in ('motion_unresolved', 'warming_up'):
+            return result
+        good = []
+        for x in reversed(self.window):
+            if (x['speed'] is None or x['nav'] != p.get('nav_mode') or
+                    (good and good[-1]['t']-x['t'] > REFERENCE_MAX_GAP_S+1e-6)):
+                break
+            good.append(x)
+        span = p['t']-good[-1]['t'] if good else 0
+        if span < REFERENCE_MIN_S-1e-6 or len(good) < 5:
+            return result
+        ve, vn = median(x['ve'] for x in good), median(x['vn'] for x in good)
+        residuals = sorted(math.hypot(x['ve']-ve, x['vn']-vn) for x in good)
+        dispersion = 1.4826*median(residuals)
+        # MAD alone misses a near-50/50 bimodal direction flip (11 vs 10 held
+        # frames). The upper residual tail must also agree with the center.
+        tail = residuals[math.ceil(.9*len(residuals))-1]
+        if (dispersion > REFERENCE_MAX_DISPERSION_MS or
+                tail > max(.3, 3*max(x['sigma'] for x in good)) or
+                math.hypot(p['ve']-ve, p['vn']-vn) > max(.3, 3*result['sigma_ms'])):
+            return result
+        value = math.hypot(ve, vn)
+        # Correlated/held frames cannot shrink uncertainty by sqrt(N).
+        sigma = max(dispersion, max(x['sigma'] for x in good))
+        result['reference'] = dict(value=value, sigma_ms=sigma,
+                                  lower_ms=max(0., value-3*sigma), upper_ms=value+3*sigma,
+                                  samples=len(good), window_s=round(span, 3), method=REFERENCE_METHOD)
+        return result
+
+    def _observe_trusted(self, p):
         t = p['t']
         if self.window and (t < self.window[-1]['t'] or t-self.window[-1]['t'] > MAX_GAP_S):
             self.window.clear()

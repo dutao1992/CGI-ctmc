@@ -159,7 +159,7 @@ async function runQueries(){
       $('aggregationLabel').textContent=`${aggregation.buckets||0} 个时间桶 · 已过滤${resolution}${timing}${aggregation.cache_hit?' · 缓存':''}`;
       const q=data.quality;
       $('filterBanner').hidden=!q;
-      if(q)$('filterBanner').innerHTML=`<div><strong>有效测量视图 · 过滤 v${q.version}</strong><span>${q.total.toLocaleString()} 条原始采样；可信地速按导航速度精度、连续性与持续静止证据判定；覆盖 ${number(data.summary.speed_coverage_pct,1)}% 采样。${q.anomaly_samples.toLocaleString()} 条含异常字段，${(q.status_samples||0).toLocaleString()} 条有导航状态提示；状态提示值留档；地速证据不足留空，不计最高值或里程。${q.pending_samples?` ${q.pending_samples} 条待判定，测量暂不展示。`:''}</span></div><button class="text-button" data-goto="quality">查看剔除原值 ↗</button>`;
+      if(q)$('filterBanner').innerHTML=`<div><strong>分级地速 · 过滤 v${q.version}</strong><span>${q.total.toLocaleString()} 条原始采样；${speedCoverageText(data.summary)}。可信值按导航精度、连续性与持续静止证据判定；紫色点线仅为参考，不判运动、不计最高速度、里程或告警。${q.anomaly_samples.toLocaleString()} 条含异常字段，${(q.status_samples||0).toLocaleString()} 条有导航状态提示；无合格解算继续留空。${q.pending_samples?` ${q.pending_samples} 条待判定，测量暂不展示。`:''}</span></div><button class="text-button" data-goto="quality">查看剔除原值 ↗</button>`;
       renderOverview();renderEvents();renderMap();
       if(state.view==='signals')renderSignals();
       if(state.view==='quality')renderQuality();
@@ -334,13 +334,27 @@ function nearestChartRow(rows,timestamp){
   if(lo>0&&Math.abs(Number(rows[lo-1]?.[0])-timestamp)<=Math.abs(Number(rows[lo]?.[0])-timestamp))return rows[lo-1];
   return rows[lo];
 }
+function speedCoverageText(summary){
+  return `可信覆盖 ${number(summary.speed_coverage_pct,1)}% · 参考覆盖 ${number(summary.reference_speed_coverage_pct,1)}% · 合计显示 ${number(summary.display_speed_coverage_pct,1)}%（按采样条数，非时长）`;
+}
+function referenceSpeedTooltip(data,timestamp){
+  const row=nearestChartRow(data?.series?.speed_reference,timestamp);
+  if(!Number.isFinite(row?.[1]))return '<br/>参考地速：—';
+  const low=nearestChartRow(data?.series?.speed_reference_low,timestamp),high=nearestChartRow(data?.series?.speed_reference_high,timestamp);
+  const envelope=Number.isFinite(low?.[2])&&Number.isFinite(high?.[3])?`${number(low[2]*3.6,2)} – ${number(high[3]*3.6,2)} km/h`:'—';
+  return `<br/>参考地速：${number(row[1]*3.6,2)} km/h（非可信均值）<br/>参考误差包络：${envelope}<br/>非标定置信区间；不计最高速度、里程或告警`;
+}
+function referenceSpeedSeries(rows){
+  return {name:'参考地速（非可信）',type:'line',data:rows,showSymbol:false,connectNulls:false,
+    lineStyle:{width:2,type:'dotted'},itemStyle:{color:'#8065a3'},progressive:2000};
+}
 function overviewTooltip(timestamp,speedRow,vibrationRow){
-  const speed=Number.isFinite(Number(speedRow?.[1]))?`${number(Number(speedRow[1])*3.6,2)} km/h`:'—';
+  const speed=Number.isFinite(speedRow?.[1])?`${number(speedRow[1]*3.6,2)} km/h`:'—';
   const speedRange=Number.isFinite(speedRow?.[2])&&Number.isFinite(speedRow?.[3])?`${number(speedRow[2]*3.6,2)} – ${number(speedRow[3]*3.6,2)} km/h`:'—';
-  const rms=Number.isFinite(Number(vibrationRow?.[1]))?`${number(Number(vibrationRow[1]),5)} g`:'—';
-  const peak=Number.isFinite(Number(vibrationRow?.[2]))?`${number(Number(vibrationRow[2]),5)} g`:'—';
-  const count=Number.isFinite(Number(vibrationRow?.[6]))?`${number(Number(vibrationRow[6]),0)} 点`:'—';
-  return `${chartClock(timestamp).replace(/\n/g,' ')}<br/>可信地速：${speed}（均值）<br/>桶内速度范围：${speedRange}<br/>振动 RMS：${rms}<br/>振动峰值偏差：${peak}<br/>振动有效值：${count}`;
+  const rms=Number.isFinite(vibrationRow?.[1])?`${number(vibrationRow[1],5)} g`:'—';
+  const peak=Number.isFinite(vibrationRow?.[2])?`${number(vibrationRow[2],5)} g`:'—';
+  const count=Number.isFinite(vibrationRow?.[6])?`${number(vibrationRow[6],0)} 点`:'—';
+  return `${chartClock(timestamp).replace(/\n/g,' ')}<br/>可信地速：${speed}（均值）<br/>桶内速度范围：${speedRange}${referenceSpeedTooltip(state.data,timestamp)}<br/>振动 RMS：${rms}<br/>振动峰值偏差：${peak}<br/>振动有效值：${count}`;
 }
 function overviewTimeTooltip(params){
   const list=Array.isArray(params)?params:[params],first=list[0],timestamp=Number(first?.value?.[0]??first?.data?.[0]);
@@ -355,6 +369,8 @@ function buildChart(id,metrics,options={}){
   const element=$(id);if(!element||!window.echarts)return;
   let chart=echarts.getInstanceByDom(element);
   if(!chart){chart=echarts.init(element,null,{renderer:'canvas'});state.charts.push(chart);}
+  const hasReference=metrics.some(m=>m[0]==='speed');
+  if(hasReference)options={...options,tooltipFormatter:options.tooltipFormatter||overviewTimeTooltip};
   const series=[];
   metrics.forEach(([key,label,unit,multiplier=1],i)=>{
     const alarmLines=chartAlarmLines(key,multiplier,options);
@@ -363,6 +379,7 @@ function buildChart(id,metrics,options={}){
       markArea:i===0?{silent:true,itemStyle:{color:'#cf9b4315'},label:{show:false},data:(state.data.gaps||[]).map(g=>[{xAxis:g[0]*1000},{xAxis:g[1]*1000}])}:undefined,
       markLine:alarmLines.length?{symbol:'none',label:{fontSize:9,color:'#a76b3d',backgroundColor:'#fffaf1',padding:[2,3]},lineStyle:{type:'dashed',width:1.2,color:'#be7e46'},data:alarmLines}:undefined});
   });
+  if(hasReference)series.push(referenceSpeedSeries(chartData('speed_reference',3.6,1)));
   const metric=metrics[0][0];
   const eventMetric={overspeed:'speed',acceleration:'speed',braking:'speed',roll:'roll',pitch:'pitch',shock:'ax',position_std:'lat_std',diff_age:'age'};
   const kinds=Object.keys(eventMetric).filter(k=>metrics.some(m=>m[0]===eventMetric[k]));
@@ -379,7 +396,8 @@ function buildChart(id,metrics,options={}){
     yAxis:{type:'value',scale:true,axisLabel:{fontSize:9,color:'#8c9c80'},splitNumber:3,splitLine:{lineStyle:{color:'#edf1e7',type:'dashed'}}},
     dataZoom:options.compact?[]:[{type:'inside',filterMode:'none',start:0,end:100},{type:'slider',start:0,end:100,height:13,bottom:15,borderColor:'#d9e3ce',fillerColor:'#8ca97124',handleStyle:{color:'#6d9360'},textStyle:{fontSize:8},labelFormatter:v=>chartClock(v)}],series},true);
   chart.off('click');chart.on('click',p=>{if(p.seriesType==='scatter'&&p.data[2])locateEvent(p.data[2]);else if(Array.isArray(p.value)){setView('overview');selectTime(p.value[0]/1000);const pt=nearestPoint(p.value[0]/1000);if(pt)map.panTo(mapLatLng(pt));}});
-  const hasValues=metrics.some(([key])=>(state.data.series[key]||[]).some(row=>Number.isFinite(row[1])));
+  if(hasReference)chart.setOption({legend:{show:true,data:[...metrics.map(m=>m[1]),'参考地速（非可信）'],top:0,right:10,textStyle:{fontSize:10},itemWidth:15,itemHeight:2},grid:{top:35}});
+  const hasValues=[...metrics.map(m=>m[0]),...(hasReference?['speed_reference']:[])].some(key=>(state.data.series[key]||[]).some(row=>Number.isFinite(row[1])));
   chart.setOption({graphic:[{id:'measurement-empty',type:'text',left:'center',top:'middle',invisible:hasValues,style:{text:state.data.total?'本时段无可用测量\n不可用原因及原值见数据质量':'所选时段无采样\n可查看最新采样时段',fill:'#7a8970',fontSize:12,lineHeight:22,textAlign:'center'}}]});
   chart.getZr().off('click');chart.getZr().on('click',event=>{if(event.target)return;if(chart.containPixel('grid',[event.offsetX,event.offsetY])){const v=chart.convertFromPixel('grid',[event.offsetX,event.offsetY]);if(v){setView('overview');selectTime(v[0]/1000);}}});
   chart.resize();
@@ -446,7 +464,7 @@ function derivedAccelerationData(){
   const rows=state.data?.series?.speed||[],bucket=Number(state.data?.aggregation?.bucket_s)||1;
   const maxGapS=Math.max(3,bucket*2.2),out=[];let previous=null;
   for(const row of rows){
-    const t=Number(row?.[0]),speed=Number(row?.[1]);
+    const t=Number(row?.[0]),speed=row?.[1];
     if(!Number.isFinite(t))continue;
     const usable=Number.isFinite(speed);
     if(!usable){if(previous)out.push([t-1,null]);previous=null;continue;}
@@ -499,7 +517,7 @@ const chartGroups=[
  ['东 / 北 / 天向速度','m/s',[['ve','东向','m/s'],['vn','北向','m/s'],['vu','天向','m/s']],'相对地面的东、北、天向速度分量。'],
  ['位置标准差','m',[['lat_std','纬度 σ','m'],['lon_std','经度 σ','m'],['alt_std','高程 σ','m']],'定位解的不确定度，数值越小通常越稳定。'],
  ['姿态标准差','°',[['heading_std','航向 σ','°'],['pitch_std','俯仰 σ','°'],['roll_std','横滚 σ','°']],'航向、俯仰和横滚解的短时波动大小。'],
- ['可信地速','km/h',[['speed','可信地速','km/h',3.6]],'√(Ve²+Vn²) × 3.6；精度与连续性门控，持续静止为 0，证据不足留空。不是轮速。'],
+ ['分级地速','km/h',[['speed','可信地速','km/h',3.6]],'绿色：可信地速；紫色点线：过去 1–2 秒速度向量的参考估计，不判运动或参与统计。不是轮速。'],
  ['高程','m',[['alt','高程','m']],'设备输出的海拔高度。'],
  ['使用卫星数','颗',[['sat1','主天线','颗'],['sat2','副天线','颗']],'主、副天线参与当前解算的卫星数量。'],
  ['差分延迟','s',[['age','差分延迟','s']],'差分改正数据的龄期，越大表示改正越旧。'],
@@ -547,12 +565,14 @@ function offlineNearest(t){
 function buildOfflineChart(id,metrics,options={}){
   const data=state.offlineData,element=$(id);if(!data||!element||!window.echarts)return;
   let chart=echarts.getInstanceByDom(element);if(!chart){chart=echarts.init(element,null,{renderer:'canvas'});state.charts.push(chart);}
+  const hasReference=metrics.some(m=>m[0]==='speed');
   const series=[];
   metrics.forEach(([key,label,unit,multiplier=1],i)=>{
     if(!['heading','course'].includes(key))for(const index of [2,3])series.push({name:label+(index===2?' · 最小':' · 最大'),type:'line',data:offlineChartData(data,key,multiplier,index),showSymbol:false,progressive:2000,lineStyle:{width:1.4,opacity:.9},itemStyle:{color:colors[i%3]},connectNulls:false,silent:false});
     series.push({name:label,type:'line',data:offlineChartData(data,key,multiplier,1),showSymbol:false,progressive:2000,lineStyle:['heading','course'].includes(key)?{width:1.7}:{width:1.2,opacity:.65,type:'dashed'},itemStyle:{color:colors[i%3]},connectNulls:false,
       markArea:i===0?{silent:true,itemStyle:{color:'#cf9b4315'},label:{show:false},data:(data.gaps||[]).map(g=>[{xAxis:g[0]*1000},{xAxis:g[1]*1000}])}:undefined});
   });
+  if(hasReference)series.push(referenceSpeedSeries(offlineChartData(data,'speed_reference',3.6,1)));
   const eventMetric={overspeed:'speed',acceleration:'speed',braking:'speed',roll:'roll',pitch:'pitch',shock:'ax',position_std:'lat_std',diff_age:'age'};
   const kinds=Object.keys(eventMetric).filter(kind=>metrics.some(metric=>metric[0]===eventMetric[kind]));
   const markers=data.events.items.filter(event=>kinds.includes(event.kind)).map(event=>{
@@ -562,6 +582,10 @@ function buildOfflineChart(id,metrics,options={}){
   series.push({name:'离线事件',type:'scatter',data:markers,symbol:'diamond',symbolSize:9,itemStyle:{color:'#bb6d38'},z:9});
   const crossDay=inputTime(data.start).slice(0,10)!==inputTime(data.end).slice(0,10),axisClock=value=>crossDay?inputTime(value/1000).slice(5,10)+'\n'+clock(value/1000):clock(value/1000);
   chart.setOption({animation:false,textStyle:{fontFamily:'PingFang SC, sans-serif'},grid:{left:55,right:28,top:options.compact?10:45,bottom:options.compact?30:60},legend:options.compact?{show:false}:{data:metrics.map(item=>item[1]),top:9,right:20,textStyle:{fontSize:10,color:'#788d6d'},itemWidth:13,itemHeight:2},tooltip:{trigger:'axis',renderMode:'richText',backgroundColor:'#fff',borderColor:'#d4dec9',textStyle:{fontSize:10,color:'#315c45'},valueFormatter:value=>number(value,3)},xAxis:{type:'time',min:data.start*1000,max:data.end*1000,axisLine:{lineStyle:{color:'#dde4d8'}},axisTick:{show:false},axisLabel:{fontSize:9,color:'#8c9c80',hideOverlap:true,formatter:axisClock},splitLine:{show:false}},yAxis:{type:'value',scale:true,axisLabel:{fontSize:9,color:'#8c9c80'},splitNumber:3,splitLine:{lineStyle:{color:'#edf1e7',type:'dashed'}}},dataZoom:options.compact?[]:[{type:'inside',filterMode:'none',start:0,end:100},{type:'slider',start:0,end:100,height:13,bottom:15,borderColor:'#d9e3ce',fillerColor:'#8ca97124',handleStyle:{color:'#6d9360'},textStyle:{fontSize:8},labelFormatter:axisClock}],series},true);
+  if(hasReference)chart.setOption({grid:{top:35},legend:{show:true,data:[...metrics.map(m=>m[1]),'参考地速（非可信）'],top:0,right:10,textStyle:{fontSize:10},itemWidth:15,itemHeight:2},tooltip:{trigger:'axis',renderMode:'html',confine:true,formatter:params=>{
+    const first=(Array.isArray(params)?params:[params])[0],t=first?.value?.[0],row=nearestChartRow(data.series.speed,t);
+    return `${sampleStamp(t/1000)}<br/>可信地速：${Number.isFinite(row?.[1])?number(row[1]*3.6,2)+' km/h':'—'}${referenceSpeedTooltip(data,t)}`;
+  }}});
   chart.off('click');chart.on('click',event=>{if(Array.isArray(event.value)){const point=offlineNearest(event.value[0]/1000);if(point&&offlineMap){offlineMap.panTo(mapLatLng(point));$('offlineCoordinateReadout').textContent=`${number(point.lon,7)}° E / ${number(point.lat,7)}° N · ${sampleStamp(point.t)}`;}}});
   chart.resize();
 }
@@ -592,9 +616,9 @@ function renderOfflineMap(){
 function renderOfflineAnalysis(){
   const data=state.offlineData;if(!data)return;
   $('offlineResults').hidden=false;
-  $('offlineResultMeta').textContent=`SN ${data.device_id} · ${data.total.toLocaleString()} 条 · ${stamp(data.start)} — ${stamp(data.end)} · 北京时间`;
+  $('offlineResultMeta').textContent=`SN ${data.device_id} · ${data.total.toLocaleString()} 条 · ${stamp(data.start)} — ${stamp(data.end)} · 北京时间 · ${speedCoverageText(data.summary)}`;
   $('offlineRuleBadge').textContent=`${data.offline.rule_source} · 规则 v${data.offline.rule_version}`;
-  const cards=[['估算运行里程',number(data.summary.distance_km,2),'km','有效连续速度积分'],['有效运动时间',number(data.summary.moving_s/60,1),'min','速度 ≥ 3.6 km/h'],['最高可信地速',number(data.summary.max_kmh,2),'km/h','保留桶内峰值'],['RTK 固定解占比',number(data.summary.fixed_pct,1),'%','固定解 ≠ 精度承诺'],['异常告警候选',data.events.total.toLocaleString(),'项',`${data.summary.gap_count} 处数据断档`]];
+  const cards=[['估算运行里程',number(data.summary.distance_km,2),'km','可信连续速度积分；不含参考值'],['有效运动时间',number(data.summary.moving_s/60,1),'min','通过速度精度与连续性判定'],['最高可信地速',number(data.summary.max_kmh,2),'km/h','可信桶内峰值；不含参考值'],['RTK 固定解占比',number(data.summary.fixed_pct,1),'%','固定解 ≠ 精度承诺'],['异常告警候选',data.events.total.toLocaleString(),'项',`${data.summary.gap_count} 处数据断档`]];
   $('offlineKpis').innerHTML=cards.map(([label,value,unit,note])=>`<div class="kpi"><div class="kpi-label">${label}</div><div class="kpi-value">${value}<small>${unit}</small></div><div class="kpi-note">${note}</div></div>`).join('');
   const facts=[['设备 SN',data.device_id],['文件数据量',`${data.offline.rows.toLocaleString()} 行 · ${formatBytes(data.offline.bytes)}`],['覆盖时间',duration(Math.max(0,data.end-data.start))],['规则来源',data.offline.rule_source],['安装方向',data.offline.mount_confirmed?'本次按已确认分析':'未确认 · 不判姿态/冲击'],['结果去向','仅本次内存 · 未写入生产库']];
   $('offlineFacts').innerHTML=facts.map(([label,value])=>`<div class="snapshot-row"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join('');
@@ -641,6 +665,7 @@ async function locateEvent(id){
     const p=await api('point?'+new URLSearchParams({device:state.device.id,t:event.point_t}));
     if(p.valid_pos){map.setView(mapLatLng(p),Math.max(map.getZoom(),16));playMarker?.setLatLng(mapLatLng(p));}
     $('pointDetail').innerHTML=`<p>${esc(event.label)} · ${sampleStamp(p.t)} · SN ${esc(p.device_id)}</p><span class="status-pill good">过滤后的采样</span><div class="detail-grid">${[['定位状态',p.fix_label],['导航模式',p.nav_label],['可信地速',number(kmh(p.speed),2)+' km/h'],['航向 / 俯仰 / 横滚',`${number(p.heading,2)} / ${number(p.pitch,2)} / ${number(p.roll,2)} °`],['比力 X / Y / Z',`${number(p.ax,4)} / ${number(p.ay,4)} / ${number(p.az,4)} g`],['告警字',p.warning.toString(16).toUpperCase()]].map(([k,v])=>`<div><b>${esc(k)}</b><p>${esc(v)}</p></div>`).join('')}</div><p>“—”表示该字段已剔除或不可用，不代表零值。${esc((p.quality?.reasons||[]).map(r=>r.label).join('；'))}</p><button class="button secondary" data-close="pointDialog" data-goto="quality">前往数据质量查看原始证据 ↗</button>`;
+    if(Number.isFinite(p.speed_reference))$('pointDetail').innerHTML+=`<p>参考地速（非可信）：${number(kmh(p.speed_reference),2)} km/h；误差包络 ${number(kmh(p.speed_reference_low),2)} – ${number(kmh(p.speed_reference_high),2)} km/h。运动状态仍未知，不参与最高速度、里程或告警。</p>`;
     $('pointDialog').showModal();
   }catch(e){error(e.message);}
 }
@@ -658,7 +683,7 @@ function renderFilterSummary(){
   const q=state.data?.quality;
   if(!q){$('filterSummary').innerHTML='<div class="empty">查询设备后显示过滤统计</div>';return;}
   const cards=[['原始采样',q.total,'原值保留，不物理删除'],['异常剔除采样',q.anomaly_samples,'隔离失真速度、速度不确定度或明显位置跳点'],['导航状态提示采样',q.status_samples||0,'初始化、未定向、低速航迹角均保留显示']];
-  const scopes=q.contexts.map(c=>`<article class="stationary-reference"><div><span class="status-pill good">历史静止记录（仅审计）</span><strong>SN ${esc(c.device_id)}</strong><p>${sampleStamp(c.start)} — ${c.active?'至今':sampleStamp(c.end)} · 北京时间</p><p>v8 使用可信速度与持续安静联合判定；旧静止上下文仅作审计。</p></div></article>`).join('');
+  const scopes=q.contexts.map(c=>`<article class="stationary-reference"><div><span class="status-pill good">历史静止记录（仅审计）</span><strong>SN ${esc(c.device_id)}</strong><p>${sampleStamp(c.start)} — ${c.active?'至今':sampleStamp(c.end)} · 北京时间</p><p>v8 使用可信速度与持续安静联合判定；v9 延续该判定。旧静止上下文仅作审计，参考速度不改变运动状态。</p></div></article>`).join('');
   $('filterSummary').innerHTML=`<div class="quality-grid filter-counts">${cards.map(([label,value,note])=>`<section class="panel"><h3>${label}</h3><strong>${value.toLocaleString()}</strong><p>${note}</p></section>`).join('')}</div>${scopes||'<p class="scope-note">持续 2 秒低速、低速度标准差且 IMU 安静才判静止并使用固定锚点；匀速不能仅凭低振动归零。</p>'}<p class="scope-note">可信地速门控：水平速度标准差≤0.5 m/s，运动速度须高于3倍标准差并满足连续性；证据不足留空，原始导航值与 IMU 保留。${q.pending_samples?`${q.pending_samples} 条待判定，测量暂不展示。`:''}查看和导出采用页面上方已查询的设备及时间范围。</p>`;
   const select=$('qualityReason'),selected=select.value||'anomaly';
   select.innerHTML='<option value="anomaly">全部异常剔除（待复核）</option><option value="all">全部剔除字段</option>'+q.reasons.filter(r=>r.count&&r.category==='anomaly').map(r=>`<option value="${r.code}">${esc(r.label)} · ${r.count.toLocaleString()} 条</option>`).join('');

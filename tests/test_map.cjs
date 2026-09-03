@@ -91,6 +91,31 @@ function offlineFixture(){
   return {device_id:'OFFLINE1',start,end,total:650,track,gaps:[],segments:[{start,end,state:'moving',distance_m:160,max_kmh:10.8}],events:{total:1,truncated:false,interpretation:'重新计算',items:[{id:1,kind:'overspeed',label:'速度超业务阈值',severity:'warning',start:start+20,end:start+23,point_t:start+22,peak:90,threshold:80,samples:30}]},summary:{first_t:start,last_t:end,distance_km:.16,moving_s:65,max_kmh:90,fixed_pct:92,gap_count:0},series:{speed:[[start*1000,2,1,25]],gx:[[start*1000,.2,.1,.4]],heading:[[start*1000,10,10,10]]},aggregation:{source:'offline_csv',buckets:1,bucket_s:1,query_ms:12.4},quality:{contexts:[],excluded_fields:{}},offline:{format:'CTMC filtered telemetry CSV',bytes:2048,rows:650,rule_source:'默认工程规则',rule_version:1,mount_confirmed:false,persisted:false}};
 }
 
+test('reference speed stays distinct in online and offline charts; missing trusted values are not zero',async()=>{
+  const h=await appHarness(),data=queryFixture(new URLSearchParams({start:'100',end:'200',device:'SN1'}));
+  data.series.speed=[[198000,null,null,null]];
+  data.series.speed_reference=[[198000,.5,.4,.6]];
+  data.series.speed_reference_low=[[198000,0,0,0]];
+  data.series.speed_reference_high=[[198000,1.4,1.3,1.5]];
+  h.app.setData(data);h.app.renderOverview();
+  const option=h.calls.options.get('speedChart'),reference=option.series.find(s=>s.name==='参考地速（非可信）');
+  assert.ok(reference);assert.equal(reference.lineStyle.type,'dotted');assert.equal(reference.connectNulls,false);
+  assert.equal(reference.markLine,undefined);
+  const html=option.tooltip.formatter([{value:[198000,1.8]}]);
+  assert.match(html,/可信地速：—/);assert.match(html,/参考地速：1.80 km\/h/);assert.match(html,/不计最高速度/);
+  assert.equal(option.graphic[0].invisible,true);
+  h.app.setOfflineData({...offlineFixture(),series:data.series});h.app.renderOfflineAnalysis();
+  assert.ok(h.calls.options.get('offlineSpeedChart').series.some(s=>s.name==='参考地速（非可信）'));
+});
+
+test('a reference-only gap cannot create derived acceleration or braking from a fabricated zero',async()=>{
+  const h=await appHarness(),data=queryFixture(new URLSearchParams({start:'100',end:'200',device:'SN1'}));
+  data.series.speed=[[100000,1,1,1],[101000,null,null,null],[102000,1,1,1]];
+  data.series.speed_reference=[[101000,.5,.5,.5]];
+  h.app.setData(data);h.app.setView('signals');
+  assert.equal(h.calls.options.get('signalAccelerationChart').series[0].data.filter(r=>Number.isFinite(r[1])).length,0);
+});
+
 test('actual application converts routes, endpoints, events, playback, chart and event centering only at display boundary',async()=>{
   const {app:mapTest,calls,node,setPoint}=await appHarness();
   const point=Object.freeze({lat:31.2456829,lon:121.6160766,t:100,speed:0,valid_pos:1,warning:0,device_id:'SN1'});

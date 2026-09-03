@@ -392,7 +392,9 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(status,200);gzip_data=json.loads(gzip_body)
         self.assertEqual((gzip_data['total'],gzip_data['aggregation']['source'],gzip_data['offline']['compressed']),
                          (1,'offline_csv_gzip',True))
-        self.assertEqual(len(data['series']),28);self.assertIn('track',data);self.assertIn('segments',data);self.assertIn('events',data)
+        self.assertEqual(len(data['series']),31)
+        self.assertTrue({'speed_reference','speed_reference_low','speed_reference_high'} <= set(data['series']))
+        self.assertIn('track',data);self.assertIn('segments',data);self.assertIn('events',data)
         with self.store.connect() as c:
             after=(c.execute('SELECT COUNT(*) FROM points').fetchone()[0],c.execute('SELECT COUNT(*) FROM devices').fetchone()[0],
                    c.execute('SELECT COUNT(*) FROM events').fetchone()[0],c.execute('SELECT COUNT(*) FROM audit').fetchone()[0])

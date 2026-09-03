@@ -15,7 +15,8 @@ from .rules import distance
 
 METRICS = ['speed','heading','pitch','roll','gx','gy','gz','ax','ay','az','ve','vn','vu','alt',
            'lat_std','lon_std','alt_std','heading_std','roll_std','pitch_std','age','sat1','sat2',
-           've_std','vn_std','vu_std','course','course_std']
+           've_std','vn_std','vu_std','course','course_std',
+           'speed_reference','speed_reference_low','speed_reference_high']
 ROLLUP_SECONDS = 60
 ROLLUP_LEVELS = (60,600)
 # Bump when the payload shape or motion-state semantics change; deployment
@@ -573,6 +574,9 @@ class QueryCombiner:
                          track_points=len(track),
                          speed_samples=sum(g['values']['speed'][3] for g in self.groups.values()),
                          speed_coverage_pct=100*sum(g['values']['speed'][3] for g in self.groups.values())/self.count if self.count else 0,
+                         reference_speed_samples=sum(g['values']['speed_reference'][3] for g in self.groups.values()),
+                         reference_speed_coverage_pct=100*sum(g['values']['speed_reference'][3] for g in self.groups.values())/self.count if self.count else 0,
+                         display_speed_coverage_pct=100*sum(g['values']['speed'][3]+g['values']['speed_reference'][3] for g in self.groups.values())/self.count if self.count else 0,
                          fix_counts=dict(self.fix_counts),sample_hz=(self.count-1)/span if span else 0),
                     aggregation=dict(buckets=len(self.groups),bucket_s=(self.end-self.start)/self.bins,
                                      source=source,source_resolution_s=source_resolution_s,query_ms=round(elapsed_ms,1),cache_hit=False,

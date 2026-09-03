@@ -2,6 +2,8 @@
 import sqlite3
 import json
 import unittest
+from pathlib import Path
+import subprocess
 
 import test_vehicle as fixtures
 from vehicle import quality
@@ -11,6 +13,18 @@ class StagedDeploymentTests(unittest.TestCase):
     setUp = fixtures.StoreTests.setUp
     tearDown = fixtures.StoreTests.tearDown
     ingest = fixtures.StoreTests.ingest
+
+    def test_stage_failure_restores_old_services_retention_timer(self):
+        source = (Path(__file__).resolve().parents[1]/'deploy/deploy-service.sh').read_text()
+        rollback = source[source.index('rollback() {'):source.index('trap rollback ERR')]
+        # Exercise the actual shell function with service actions stubbed; no
+        # systemd command or production path is touched by this local test.
+        script = '''nginx_changed=0; cutover=0; derived_changed=0; previous=/old
+systemctl() { printf 'service-action:%s\\n' "$*"; return 0; }
+'''+rollback+'\nrollback\n'
+        result = subprocess.run(['bash','-c',script], capture_output=True, text=True, check=True)
+        self.assertIn('service-action:enable --now ctmc-vehicle-retention.timer', result.stdout)
+        self.assertNotIn('service-action:stop ctmc-vehicle.service', result.stdout)
 
     def prepared(self):
         self.ingest(*fixtures.LIVE)

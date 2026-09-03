@@ -66,6 +66,10 @@ rollback() {
     fi
   elif [[ "$cutover" -eq 1 ]] && { [[ -z "$previous" ]] || [[ ! -d "$previous" ]]; }; then
     systemctl stop ctmc-vehicle.service
+  elif [[ "$cutover" -eq 0 ]] && systemctl is-active --quiet ctmc-vehicle.service; then
+    # A bounded snapshot failure leaves the old service intact. Restore its
+    # retention timer too; precomputation must not disable it indefinitely.
+    systemctl enable --now ctmc-vehicle-retention.timer
   fi
   printf '%s\n' 'Publish aborted; candidate and backup retained for inspection. Verify health and retention before retrying.' >&2
 }
@@ -80,7 +84,7 @@ if [[ -f /etc/systemd/system/ctmc-vehicle-retention.timer ]]; then
 fi
 # Heavy work happens on a consistent snapshot, with the old API still serving.
 # A bounded stage failure does not stop the working service.
-timeout --signal=TERM --kill-after=10s 1200 ionice -c 2 -n 7 nice -n 15 /usr/bin/python3.11 -u deploy/prepare-quality.py \
+timeout --signal=TERM --kill-after=10s 2400 ionice -c 2 -n 7 nice -n 15 /usr/bin/python3.11 -u deploy/prepare-quality.py \
   --stage-from /srv/ctmc-vehicle/data/vehicle.sqlite --db "$stage_db" \
   --backup "$quality_backup" \
   --context deploy/stationary-6094510-20260826.json \
