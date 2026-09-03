@@ -484,6 +484,13 @@ def project(row, info=False):
     p['valid_pos'] = int(bool(p['valid_pos'] and p['lat'] is not None and p['lon'] is not None))
     p['stationary_context'] = p.get('q_context') if not pending else None
     p['motion_state'] = (p.get('q_motion_state') if not pending else None) or motion_state(p)
+    # Vehicle speed follows the motion decision, not GNSS velocity residuals
+    # or displacement of retained static positions.  Normalize before any
+    # consumer (curves, rollups, replay, exports, or event rules) sees it.
+    # The input row and raw evidence remain untouched; unknown/pending motion
+    # must never be turned into a fabricated zero.
+    if not pending and p['motion_state'] == 'stationary':
+        p['speed'] = 0.0
     if info:
         p['quality'] = dict(version=VERSION, pending=pending, excluded_fields=fields,
                             reasons=[dict(code=k,label=label,category=kind) for k,(label,kind) in REASONS.items() if reasons & REASON_BITS[k]],

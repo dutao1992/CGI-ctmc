@@ -237,7 +237,7 @@ function renderMap(){
   if(!points.length)$('playTime').textContent='--:--:--';
   $('coordinateReadout').textContent=points.length?`等待选定有效采样 · ${points.length.toLocaleString()} 个回放锚点`:'本时段无有效位置，未绘制轨迹';
   $('stationaryMapNote').hidden=!points.some(point=>point.motion_state==='stationary');
-  $('stationaryMapNote').textContent='轨迹保留运行与静止期间的有效定位；仅对明显单步位置跳变断线并隔离经纬度。静止期间使用导航模式保留的位置采样。';
+  $('stationaryMapNote').textContent='轨迹保留运行与静止期间的有效定位；仅对明显单步位置跳变断线并隔离经纬度。静止期间按前后运行连续性与导航模式可信度选取一个固定位置。';
   fitMap();
 }
 function mapLatLng(p){

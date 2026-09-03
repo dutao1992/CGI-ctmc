@@ -20,8 +20,12 @@ ROLLUP_SECONDS = 60
 ROLLUP_LEVELS = (60,600)
 # Bump when the payload shape or motion-state semantics change; deployment
 # rebuilds both levels before serving queries.
-ROLLUP_VERSION = quality.VERSION * 100 + 4
+ROLLUP_VERSION = quality.VERSION * 100 + 6
 TRACK_LIMIT = 20000
+STATIONARY_POSITION_CANDIDATE = 'position_candidate'
+STATIONARY_POSITION_CANDIDATES = 'position_candidates'
+POSITION_CANDIDATE_LIMIT = 32
+POSITION_CONTINUITY_TOLERANCE_M = 2.0
 ENDPOINT_FIELDS = list(dict.fromkeys(
     ['t','lat','lon','speed','heading','fix_mode','nav_mode','valid_pos','stationary_context','motion_state','lat_std','lon_std'] + METRICS
 ))
@@ -57,6 +61,53 @@ def _motion_state(p):
     if state in ('moving', 'stationary', 'unknown'):
         return state
     return quality.motion_state(p)
+
+
+def _position_confidence(p):
+    """Rank a position by navigation solution credibility, not displacement."""
+    if not p.get('valid_pos') or not all(isinstance(p.get(key), (int, float)) and
+                                         math.isfinite(p[key]) for key in ('lat', 'lon')):
+        return None
+    nav_rank = {2: 3, 1: 2}.get(p.get('nav_mode'), 0)
+    fix_rank = {4: 4, 8: 4, 5: 3, 9: 3, 3: 2, 2: 2, 1: 1}.get(p.get('fix_mode'), 0)
+    uncertainty = max(p.get('lat_std') or 0, p.get('lon_std') or 0)
+    # Navigation mode dominates, then fix type; lower reported uncertainty is
+    # only a tie-breaker.  This is deliberately independent of static drift.
+    return nav_rank * 100 + fix_rank * 10 - min(float(uncertainty), 100.0) / 100.0
+
+
+def _position_candidate(p):
+    confidence = _position_confidence(p)
+    if confidence is None:
+        return None
+    return dict(lat=p['lat'], lon=p['lon'], t=p['t'], nav_mode=p.get('nav_mode'),
+                fix_mode=p.get('fix_mode'), confidence=confidence)
+
+
+def _bounded_position_candidates(candidates):
+    """Keep credible and temporally distributed static fixes in a rollup."""
+    candidates = [dict(item) for item in candidates if item]
+    if len(candidates) <= POSITION_CANDIDATE_LIMIT:
+        return candidates
+    ranked = sorted(candidates, key=lambda item: (-item.get('confidence', -math.inf), item.get('t', math.inf)))
+    temporal = sorted(candidates, key=lambda item: item.get('t', math.inf))
+    keep = ranked[:POSITION_CANDIDATE_LIMIT // 2]
+    for index in range(POSITION_CANDIDATE_LIMIT // 2):
+        choice = temporal[round(index * (len(temporal) - 1) /
+                                max(1, POSITION_CANDIDATE_LIMIT // 2 - 1))]
+        if not any(choice.get('t') == item.get('t') for item in keep):
+            keep.append(choice)
+    return keep[:POSITION_CANDIDATE_LIMIT]
+
+
+def _prefer_position_candidate(left, right):
+    """Return the more credible candidate with deterministic tie-breaking."""
+    if right is None:
+        return left
+    if left is None:
+        return right
+    return right if (right.get('confidence', -math.inf), -right.get('t', math.inf)) > \
+        (left.get('confidence', -math.inf), -left.get('t', math.inf)) else left
 
 
 def _specific_force_magnitude(p):
@@ -109,10 +160,9 @@ class RollupBuilder:
         self.fixed += int(p['fix_mode'] in (4,8))
         self.valid += int(bool(p['valid_pos']))
         self.fix_counts[str(p['fix_mode'])] += 1
-        # Highest effective speed excludes stationary samples and invalid
-        # navigation solutions; the raw speed channel remains available in the
-        # evidence view unless the physical-limit rule quarantines it.
-        if p['speed'] is not None and p['valid_pos'] and _motion_state(p) != 'stationary':
+        # Confirmed stationary samples contribute zero even without a valid
+        # position. Moving speeds still require a valid navigation solution.
+        if p['speed'] is not None and (p['valid_pos'] or _motion_state(p) == 'stationary'):
             self.max_speed = max(self.max_speed or 0,p['speed']*3.6)
         for metric in METRICS:
             value = p[metric]
@@ -148,6 +198,12 @@ class RollupBuilder:
             self.current['end'] = p['t']
             if p['speed'] is not None:
                 self.current['max_kmh'] = max(self.current['max_kmh'] or 0,p['speed']*3.6)
+        if state == 'stationary':
+            candidate = _position_candidate(p)
+            self.current[STATIONARY_POSITION_CANDIDATES] = _bounded_position_candidates(
+                self.current.get(STATIONARY_POSITION_CANDIDATES, []) + ([candidate] if candidate else []))
+            self.current[STATIONARY_POSITION_CANDIDATE] = _prefer_position_candidate(
+                self.current.get(STATIONARY_POSITION_CANDIDATE), candidate)
         self.current['distance_m'] += transition['mileage']
 
         if p['valid_pos']:
@@ -245,10 +301,69 @@ class QueryCombiner:
                 previous = self.segments[-1]
                 previous['end'] = part['end']
                 previous['distance_m'] += part['distance_m']
+                if previous['state'] == 'stationary':
+                    previous[STATIONARY_POSITION_CANDIDATES] = _bounded_position_candidates(
+                        previous.get(STATIONARY_POSITION_CANDIDATES, []) +
+                        part.get(STATIONARY_POSITION_CANDIDATES, []))
+                    previous[STATIONARY_POSITION_CANDIDATE] = _prefer_position_candidate(
+                        previous.get(STATIONARY_POSITION_CANDIDATE),
+                        part.get(STATIONARY_POSITION_CANDIDATE))
                 if part.get('max_kmh') is not None:
                     previous['max_kmh'] = max(previous.get('max_kmh') or 0,part['max_kmh'])
             else:
                 self.segments.append(part)
+
+    @staticmethod
+    def _stationary_anchor(segment, track):
+        """Choose one static coordinate using neighboring motion and confidence."""
+        candidates = segment.get(STATIONARY_POSITION_CANDIDATES) or []
+        if not candidates and segment.get(STATIONARY_POSITION_CANDIDATE):
+            candidates = [segment[STATIONARY_POSITION_CANDIDATE]]
+        if not candidates:
+            return None
+        before = next((p for p in reversed(track)
+                       if p['t'] < segment['start'] and p.get('motion_state') == 'moving' and
+                       isinstance(p.get('lat'), (int, float)) and isinstance(p.get('lon'), (int, float))), None)
+        after = next((p for p in track
+                      if p['t'] > segment['end'] and p.get('motion_state') == 'moving' and
+                      isinstance(p.get('lat'), (int, float)) and isinstance(p.get('lon'), (int, float))), None)
+        # A stop should connect to the position occupied at both sides.  Use
+        # their midpoint when both are available; this avoids following static
+        # GNSS wander while retaining the selected in-segment fix.
+        if before and after:
+            target = dict(lat=(before['lat'] + after['lat']) / 2,
+                          lon=(before['lon'] + after['lon']) / 2)
+        elif before or after:
+            target = before or after
+        else:
+            target = candidates[0]
+        # The candidate is selected from the static samples.  Continuity first
+        # rejects implausible drift; among fixes within a small physical
+        # tolerance, navigation confidence wins.  This prevents a low-quality
+        # fix from replacing a credible one merely because it is a fraction
+        # closer to the midpoint of two moving samples.
+        distances = {id(candidate): distance(candidate, target) for candidate in candidates}
+        nearest = min(distances.values())
+        eligible = [candidate for candidate in candidates
+                    if distances[id(candidate)] <= nearest + POSITION_CONTINUITY_TOLERANCE_M]
+        selected = max(eligible, key=lambda p: (p.get('confidence', -math.inf),
+                                                  -distances[id(p)], -p['t']))
+        return dict(lat=selected['lat'], lon=selected['lon'])
+
+    @classmethod
+    def _anchor_stationary_track(cls, track, segments):
+        anchored = [dict(point) for point in track]
+        for segment in segments:
+            if segment.get('state') != 'stationary':
+                continue
+            anchor = cls._stationary_anchor(segment, anchored)
+            if not anchor:
+                continue
+            for point in anchored:
+                if segment['start'] <= point['t'] <= segment['end'] and point.get('motion_state') == 'stationary':
+                    point['lat'], point['lon'] = anchor['lat'], anchor['lon']
+                    point['position_source'] = 'stationary_anchor'
+        return anchored
 
     def _append_track(self, snap, transition):
         points = [dict(p) for p in snap['track']]
@@ -300,6 +415,7 @@ class QueryCombiner:
         track = []
         for point in self.track:
             item = dict(point);item.pop('_bucket',None);item.pop('tail',None);track.append(item)
+        track = self._anchor_stationary_track(track, self.segments)
         return dict(version=ROLLUP_VERSION,device_id=self.device_id,bucket_start=int(start),bucket_s=int(seconds),
                     count=self.count,first=self.first_point,last=self.prev,fixed=self.fixed,valid=self.valid,
                     max_speed=self.max_speed,fix_counts=dict(self.fix_counts),metrics=values,
@@ -384,9 +500,12 @@ class QueryCombiner:
         track = []
         for p in bounded_track(self.track):
             p = dict(p); p.pop('_bucket',None); p.pop('tail',None); track.append(p)
+        track = self._anchor_stationary_track(track, self.segments)
         segments = []
         for segment in self.segments:
             item = dict(segment); item.pop('break_before',None)
+            item.pop(STATIONARY_POSITION_CANDIDATE, None)
+            item.pop(STATIONARY_POSITION_CANDIDATES, None)
             if item['end']-item['start'] >= 30:
                 segments.append(item)
         span = self.last-self.first if self.first is not None else 0
