@@ -261,7 +261,7 @@ def analyze_stream(source, byte_size, rule_resolver=None, mount_mode='auto', com
         rule_source=rule_source,rule_version=rules['version'],mount_confirmed=bool(mount_confirmed),
         persisted=False,limits=dict(max_bytes=limit,max_rows=MAX_ROWS,max_span_days=31))
     result['aggregation']['query_ms'] = round((time.perf_counter()-began)*1000,1)
-    result['aggregation']['method'] = '离线有效数据按三轴合成峰值偏差（≤ 0.005 g 静止，> 0.005 g 运行）和时间桶计算；不补零、不插值；轨迹、区段和候选事件使用当前在线同口径算法'
+    result['aggregation']['method'] = f'离线有效数据按三轴合成峰值偏差（≤ {quality.MOTION_IMPACT_THRESHOLD_G:.3f} g 静止，> {quality.MOTION_IMPACT_THRESHOLD_G:.3f} g 运行）和时间桶计算；不补零、不插值；轨迹、区段和候选事件使用当前在线同口径算法'
     return result
 
 

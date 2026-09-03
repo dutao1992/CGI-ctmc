@@ -1,6 +1,6 @@
 """Versioned, reversible measurement quarantine. Never mutates original points.
 
-v5 uses one deterministic tri-axis resultant threshold for motion state.  The
+v6 uses one deterministic tri-axis resultant threshold for motion state.  The
 only navigation quarantine is a conservative severe coordinate-jump check;
 initialization, heading readiness, low-speed course and static positions stay
 visible as evidence.
@@ -17,15 +17,15 @@ import time
 from .protocol import NUMERIC
 from .rules import distance
 
-VERSION = 5
-# v5 deliberately has one motion rule.  A sample is stationary when the
-# resultant specific-force magnitude is within 0.005 g of the 1 g gravity
+VERSION = 6
+# v6 deliberately has one motion rule.  A sample is stationary when the
+# resultant specific-force magnitude is within 0.01 g of the 1 g gravity
 # baseline; anything above the line is motion.  Navigation mode, heading
 # readiness and reported speed do not participate in this decision.
-MOTION_IMPACT_THRESHOLD_G = 0.005
+MOTION_IMPACT_THRESHOLD_G = 0.01
 MOTION_STRATEGY = 'tri_axis_peak_deviation'
 # Frozen manifests from earlier releases are retained for audit only.  They
-# must never become the active filter after the v5 migration.
+# must never become the active filter after the v6 migration.
 COMPATIBLE_PROFILE_VERSIONS = (1, 2, 3, 4, VERSION)
 MAX_VALID_VEHICLE_SPEED_KMH = 130.0
 MAX_VALID_VEHICLE_SPEED_MS = MAX_VALID_VEHICLE_SPEED_KMH / 3.6
@@ -49,12 +49,12 @@ REASONS = {
     'invalid_navigation': ('导航初始化 / 定位无效（保留显示）', 'status'),
     'heading_unavailable': ('定向未就绪（保留显示）', 'status'),
     'course_unavailable': ('静止或低速航迹角（保留显示）', 'status'),
-    # v5 retains stable reason names for the two field-level navigation
+    # v6 retains stable reason names for the two field-level navigation
     # quarantines; raw measurements remain untouched.
     'navigation_position_drift': ('显著位置漂移', 'anomaly'),
     'navigation_velocity_outlier': ('导航速度解算超过车辆物理上限', 'anomaly'),
     # Kept as stable reason names so older clients can still parse an audit
-    # record; v5 no longer emits these legacy stationary-fit reasons.
+    # record; v6 no longer emits these legacy stationary-fit reasons.
     'stationary_position': ('历史规则：静止定位偏差', 'legacy'),
     'position_uncertainty': ('历史规则：水平定位不确定度超限', 'legacy'),
     'stationary_altitude': ('历史规则：静止高程离群', 'legacy'),
@@ -115,7 +115,7 @@ def contexts(c, sn=None, include_legacy=False):
     for row in rows:
         item = dict(row, profile=json.loads(row['profile']))
         # v1-v4 stationary facts remain queryable by an explicit audit, but
-        # cannot affect the v5 operational projection.  This prevents the old
+        # cannot affect the v6 operational projection.  This prevents the old
         # open context from turning all later running coordinates into static
         # residuals after the threshold migration.
         current = (item['profile'].get('strategy') == MOTION_STRATEGY and
@@ -146,7 +146,7 @@ def context_for(p, scopes):
 
 
 def automatic_exit_policy(context):
-    """Return the v5 threshold policy for API compatibility."""
+    """Return the v6 threshold policy for API compatibility."""
     return dict(AUTO_EXIT_POLICY)
 
 
@@ -214,7 +214,7 @@ def navigation_position_drift(previous, current):
 
 
 class AutomaticStationaryEntryDetector:
-    """Deprecated v4 lifecycle hook; v5 never opens inferred contexts."""
+    """Deprecated v4 lifecycle hook; v6 never opens inferred contexts."""
     def __init__(self):
         self.windows = {}
 
@@ -226,7 +226,7 @@ class AutomaticStationaryEntryDetector:
         # and historical decisions use motion_state() directly.
         return None
         # Legacy implementation retained below only for forensic source
-        # comparison; it is unreachable in v5.
+        # comparison; it is unreachable in v6.
         device_id = p['device_id']
         if context or p['t'] > time.time():
             self.forget(device_id)
@@ -299,7 +299,7 @@ class AutomaticStationaryEntryDetector:
 
 
 class ActiveStationaryExitDetector:
-    """Deprecated v4 lifecycle hook; v5 has no inferred exit lifecycle."""
+    """Deprecated v4 lifecycle hook; v6 has no inferred exit lifecycle."""
     def __init__(self):
         self.candidates = {}
 
@@ -311,7 +311,7 @@ class ActiveStationaryExitDetector:
     def observe(self, p, context):
         return None
         # Legacy implementation retained below only for forensic source
-        # comparison; it is unreachable in v5.
+        # comparison; it is unreachable in v6.
         if not context or context.get('kind') != 'confirmed_stationary_active' or not context.get('active'):
             return None
         policy = automatic_exit_policy(context)
@@ -535,7 +535,7 @@ def build_context(c, sn, start, end, provenance):
                    horizontal_limit_ms=max(limits[k] for k in ('speed','ve','vn')),
                    radial_median_m=radial_median,radial_mad_m=radial_mad,
                    population=count,valid_population=population,training_samples=len(radii),stride=stride,
-                   method='v5 tri-axis peak-deviation state; legacy fitted profile retained for audit only',
+                   method='v6 tri-axis peak-deviation state; legacy fitted profile retained for audit only',
                    strategy=MOTION_STRATEGY, motion_threshold_g=MOTION_IMPACT_THRESHOLD_G, version=VERSION)
     scope = dict(device_id=sn,start=start,end=end,kind='confirmed_stationary',profile=profile,provenance=provenance)
     scope['id'] = hashlib.sha256(json.dumps(scope,sort_keys=True).encode()).hexdigest()[:20]

@@ -20,12 +20,16 @@ ROLLUP_SECONDS = 60
 ROLLUP_LEVELS = (60,600)
 # Bump when the payload shape or motion-state semantics change; deployment
 # rebuilds both levels before serving queries.
-ROLLUP_VERSION = quality.VERSION * 100 + 6
+ROLLUP_VERSION = quality.VERSION * 100 + 7
 TRACK_LIMIT = 20000
 STATIONARY_POSITION_CANDIDATE = 'position_candidate'
 STATIONARY_POSITION_CANDIDATES = 'position_candidates'
 POSITION_CANDIDATE_LIMIT = 32
 POSITION_CONTINUITY_TOLERANCE_M = 2.0
+# A navigation jump can split one otherwise-contiguous stop into several
+# route parts.  Keep those parts on one static anchor when the samples remain
+# within the normal 3-second continuity window; a longer gap may be a new stop.
+STATIONARY_ANCHOR_MAX_GAP_S = 3.0
 ENDPOINT_FIELDS = list(dict.fromkeys(
     ['t','lat','lon','speed','heading','fix_mode','nav_mode','valid_pos','stationary_context','motion_state','lat_std','lon_std'] + METRICS
 ))
@@ -353,16 +357,49 @@ class QueryCombiner:
     @classmethod
     def _anchor_stationary_track(cls, track, segments):
         anchored = [dict(point) for point in track]
-        for segment in segments:
+        index = 0
+        while index < len(segments):
+            segment = segments[index]
             if segment.get('state') != 'stationary':
+                index += 1
                 continue
-            anchor = cls._stationary_anchor(segment, anchored)
+            # A severe navigation jump marks a route break for rendering, but
+            # it does not end a stationary interval.  Combine adjacent
+            # stationary parts before selecting an anchor so static GNSS drift
+            # cannot become a second (or third) displayed position.
+            group = [segment]
+            group_end = segment['end']
+            next_index = index + 1
+            while next_index < len(segments):
+                candidate_part = segments[next_index]
+                if candidate_part.get('state') != 'stationary':
+                    break
+                gap = float(candidate_part['start']) - float(group_end)
+                if gap < 0 or gap > STATIONARY_ANCHOR_MAX_GAP_S:
+                    break
+                group.append(candidate_part)
+                group_end = max(group_end, candidate_part['end'])
+                next_index += 1
+            combined = dict(start=group[0]['start'], end=group_end, state='stationary')
+            candidates = []
+            preferred = None
+            for part in group:
+                candidates.extend(part.get(STATIONARY_POSITION_CANDIDATES) or [])
+                preferred = _prefer_position_candidate(
+                    preferred, part.get(STATIONARY_POSITION_CANDIDATE))
+            if candidates:
+                combined[STATIONARY_POSITION_CANDIDATES] = _bounded_position_candidates(candidates)
+            if preferred:
+                combined[STATIONARY_POSITION_CANDIDATE] = preferred
+            anchor = cls._stationary_anchor(combined, anchored)
             if not anchor:
+                index = next_index
                 continue
             for point in anchored:
-                if segment['start'] <= point['t'] <= segment['end'] and point.get('motion_state') == 'stationary':
+                if combined['start'] <= point['t'] <= combined['end'] and point.get('motion_state') == 'stationary':
                     point['lat'], point['lon'] = anchor['lat'], anchor['lon']
                     point['position_source'] = 'stationary_anchor'
+            index = next_index
         return anchored
 
     def _append_track(self, snap, transition):
@@ -538,7 +575,7 @@ class QueryCombiner:
                     aggregation=dict(buckets=len(self.groups),bucket_s=(self.end-self.start)/self.bins,
                                      source=source,source_resolution_s=source_resolution_s,query_ms=round(elapsed_ms,1),cache_hit=False,
                                      track_points=len(track),track_limit=TRACK_LIMIT,track_truncated=self.track_truncated or len(self.track)>TRACK_LIMIT,
-                    method='先按 v5 三轴合成峰值偏差（|√(ax²+ay²+az²)-1| > 0.005 g）判定运动/静止，再隔离超过车辆物理上限或明显跳点的导航字段；不插值；长窗口分层读取可重建的 60 秒或 10 分钟聚合，首尾读取原始采样',
+                    method=f'先按 v{quality.VERSION} 三轴合成峰值偏差（|√(ax²+ay²+az²)-1| > {quality.MOTION_IMPACT_THRESHOLD_G:.3f} g）判定运动/静止，再隔离超过车辆物理上限或明显跳点的导航字段；不插值；长窗口分层读取可重建的 60 秒或 10 分钟聚合，首尾读取原始采样',
                                      timezone='Asia/Shanghai',coordinates='WGS84 原始坐标；前端高德底图单独转换为 GCJ-02 展示',
                                      mileage='有效定位且连续速度≥3.6 km/h 时的速度梯形积分；缺测不外推，非 CAN 里程'))
 

@@ -526,11 +526,11 @@ class QualityTests(unittest.TestCase):
         with self.store.connect() as c:
             self.assertEqual([tuple(row) for row in c.execute('SELECT * FROM points')],before)
 
-    def test_v5_motion_state_uses_only_tri_axis_peak_deviation(self):
+    def test_v6_motion_state_uses_only_tri_axis_peak_deviation(self):
         point=parse(LIVE[0]);tow=point['tow'];self.t=point['t']
         stationary=altered(tow=tow,ax=1.004,ay=0,az=0,speed=30,status='60')
-        boundary=altered(tow=tow+.1,ax=1.005,ay=0,az=0,speed=0,status='60')
-        moving=altered(tow=tow+.2,ax=1.006,ay=0,az=0,speed=0,status='60')
+        boundary=altered(tow=tow+.1,ax=1.009,ay=0,az=0,speed=0,status='60')
+        moving=altered(tow=tow+.2,ax=1.011,ay=0,az=0,speed=0,status='60')
         self.assertEqual(quality.motion_state(parse(stationary)),'stationary')
         self.assertEqual(quality.motion_state(parse(boundary)),'stationary')
         self.assertEqual(quality.motion_state(parse(moving)),'moving')
@@ -544,7 +544,7 @@ class QualityTests(unittest.TestCase):
         result=self.store.query('6094510',self.t-.1,self.t+1)
         self.assertEqual(result['motion_states'][-1][1],'moving')
 
-    def test_v5_keeps_static_and_running_positions_but_masks_a_severe_jump(self):
+    def test_v6_keeps_static_and_running_positions_but_masks_a_severe_jump(self):
         point=parse(LIVE[0]);tow=point['tow'];self.t=point['t']
         static=altered(tow=tow,ax=1,ay=0,az=0,lat=point['lat'],lon=point['lon'])
         running=altered(tow=tow+.1,ax=1.02,ay=0,az=0,speed=2,lat=point['lat']+.00001)
@@ -613,7 +613,7 @@ class QualityTests(unittest.TestCase):
         self.assertIn('navigation_velocity_outlier',
                       {detail['code'] for detail in records['items'][0]['details']})
 
-    def test_v5_does_not_open_speed_or_position_based_stationary_contexts(self):
+    def test_v6_does_not_open_speed_or_position_based_stationary_contexts(self):
         p=parse(LIVE[0]);tow=p['tow'];self.t=p['t']
         frames=[altered(tow=tow+i,status='91',speed=.3,ve=0,vn=.3,
                         lat=p['lat']+i*.0000027,ax=1,ay=0,az=0) for i in range(121)]
@@ -659,7 +659,7 @@ class QualityTests(unittest.TestCase):
         self.ingest(altered(tow=tow+21,status='42',speed=8,ve=8,ax=1.02,lat_std=1,lon_std=1,alt_std=1))
         self.assertEqual(self.store.point('6094510',self.t+21)['speed'],8)
 
-    def test_v5_static_position_is_retained_even_with_large_reported_uncertainty(self):
+    def test_v6_static_position_is_retained_even_with_large_reported_uncertainty(self):
         p=parse(LIVE[0]);tow=p['tow'];self.t=p['t']
         frames=[altered(tow=tow+i*.1,speed=.05,ve=.01,vn=.01,vu=0,lat_std=1,lon_std=1,alt_std=1) for i in range(120)]
         self.ingest(*frames)
@@ -678,7 +678,7 @@ class QualityTests(unittest.TestCase):
         evidence=self.store.quality_records('6094510',self.t+19,self.t+21,'anomaly')
         self.assertEqual(evidence['total'],0)
 
-    def test_v5_motion_does_not_revoke_or_create_stationary_lifecycle_facts(self):
+    def test_v6_motion_does_not_revoke_or_create_stationary_lifecycle_facts(self):
         p=parse(LIVE[0]);tow=p['tow'];self.t=p['t']
         self.ingest(*[altered(tow=tow+i*.1,speed=.05,ax=1,ay=0,az=0) for i in range(120)])
         with self.store.connect() as c:
@@ -696,7 +696,7 @@ class QualityTests(unittest.TestCase):
         self.assertTrue(all(self.store.point('6094510',timestamp)['motion_state']=='moving' for timestamp in moving_times))
         self.assertIsNotNone(self.store.point('6094510',moving_times[0])['lat'])
 
-    def test_v5_classifies_satellite_only_motion_without_navigation_fields(self):
+    def test_v6_classifies_satellite_only_motion_without_navigation_fields(self):
         p=parse(LIVE[0]);tow=p['tow'];self.t=p['t']
         self.ingest(*[altered(tow=tow+i*.1,status='60',speed=0,ax=1.02,ay=0,az=0,
                               lat=p['lat']+.000001*i) for i in range(20)])

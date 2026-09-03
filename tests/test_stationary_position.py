@@ -81,6 +81,59 @@ class StationaryPositionTests(unittest.TestCase):
         self.assertGreaterEqual(len(static_track), 3)
         self.assertTrue(all(abs(p['lat'] - anchor_lat) < 1e-10 for p in static_track))
 
+    def test_stationary_anchor_is_shared_across_navigation_jump_breaks(self):
+        point = parse(fixtures.LIVE[0])
+        anchor_lat, anchor_lon = point['lat'] + .00015, point['lon']
+        tow = point['tow']
+        frames = [
+            fixtures.altered(tow=tow, status='42', ax=1.02, speed=0,
+                             lat=anchor_lat, lon=anchor_lon),
+            fixtures.altered(tow=tow+1, status='42', ax=1, speed=0,
+                             lat=anchor_lat, lon=anchor_lon),
+            # This isolated GNSS jump is quarantined and breaks the rendered
+            # route, but it must not create a second static position anchor.
+            fixtures.altered(tow=tow+2, status='91', ax=1, speed=0,
+                             lat=anchor_lat+.01, lon=anchor_lon),
+            fixtures.altered(tow=tow+3, status='91', ax=1, speed=0,
+                             lat=anchor_lat, lon=anchor_lon),
+            fixtures.altered(tow=tow+4, status='91', ax=1, speed=0,
+                             lat=anchor_lat+.00020, lon=anchor_lon),
+            fixtures.altered(tow=tow+5, status='42', ax=1.02, speed=0,
+                             lat=anchor_lat, lon=anchor_lon),
+        ]
+        self.ingest(*frames)
+        timestamps = [parse(frame)['t'] for frame in frames]
+        result = self.store.query(point['device_id'], timestamps[0] - .1,
+                                  timestamps[-1] + .1, bins=20)
+        static_track = [item for item in result['track'] if item['motion_state'] == 'stationary']
+        print('\nstatic anchors across jump:',
+              [(item['t'], item['lat'], item.get('position_source')) for item in static_track], flush=True)
+        self.assertGreaterEqual(len(static_track), 2)
+        self.assertTrue(all(abs(item['lat'] - anchor_lat) < 1e-10 for item in static_track))
+        self.assertTrue(all(item.get('position_source') == 'stationary_anchor'
+                            for item in static_track))
+
+    def test_stationary_anchor_does_not_follow_drift_between_jump_split_parts(self):
+        """Navigation jump breaks must not turn one stop into two positions."""
+        from vehicle.aggregate import QueryCombiner
+
+        anchor = dict(lat=31.24572566, lon=121.61562931)
+        drift = dict(lat=31.24592566, lon=121.61562931)
+        track = [
+            dict(t=100.0, **anchor, motion_state='stationary'),
+            dict(t=101.0, **drift, motion_state='stationary'),
+        ]
+        parts = [
+            dict(start=100.0, end=100.0, state='stationary',
+                 position_candidates=[dict(**anchor, t=100.0, confidence=100)]),
+            dict(start=101.0, end=101.0, state='stationary',
+                 position_candidates=[dict(**drift, t=101.0, confidence=100)]),
+        ]
+        rendered = QueryCombiner._anchor_stationary_track(track, parts)
+        print('jump-split stationary anchors:',
+              [(item['t'], item['lat'], item.get('position_source')) for item in rendered], flush=True)
+        self.assertTrue(all(abs(item['lat'] - anchor['lat']) < 1e-10 for item in rendered))
+
 
 if __name__ == '__main__':
     unittest.main()

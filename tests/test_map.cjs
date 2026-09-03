@@ -108,7 +108,7 @@ test('actual application converts routes, endpoints, events, playback, chart and
   calls.charts.get('click')({seriesType:'line',value:[101000,0]});near(calls.pans.at(-1),CTMCMap.latLng(track[1]));
   await mapTest.locateEvent(1);near(calls.centers.at(-1),CTMCMap.latLng(point));near(calls.moves.at(-1),CTMCMap.latLng(point));
   assert.equal(JSON.stringify(track),original);
-  // v5 keeps measured positions in both static and running periods.
+  // v6 keeps measured positions in both static and running periods.
   const anchor={lat:31.2456,lon:121.616},staticTrack=track.map(p=>({...p,motion_state:'stationary',speed:null}));
   mapTest.setData({...data,track:staticTrack,quality:{contexts:[]}});
   mapTest.renderMap();
@@ -183,7 +183,7 @@ test('overview and inertial curves draw dashed alarm thresholds for direct chann
   const speed=h.calls.options.get('speedChart'),speedLine=speed.series.find(s=>s.name==='车辆速度');
   assert.equal(speedLine.markLine.lineStyle.type,'dashed');assert.equal(speedLine.markLine.data[0].yAxis,80);
   const overviewVibration=h.calls.options.get('overviewVibrationTimeChart');
-  assert.equal(overviewVibration.series[1].markLine.lineStyle.type,'dashed');assert.deepEqual(Array.from(overviewVibration.series[1].markLine.data,map=>map.yAxis),[.005,.8]);
+  assert.equal(overviewVibration.series[1].markLine.lineStyle.type,'dashed');assert.deepEqual(Array.from(overviewVibration.series[1].markLine.data,map=>map.yAxis),[.01,.8]);
   h.app.setView('signals');
   const pitch=h.calls.options.get('signal-0').series.find(s=>s.name==='俯仰');
   assert.deepEqual(Array.from(pitch.markLine.data,map=>map.yAxis),[12,-12]);
@@ -213,7 +213,7 @@ test('inertial analysis separates signed acceleration and three-axis shock decis
   assert.deepEqual(Array.from(acceleration.series[1].data.map(row=>row[1])),[4,-3.5]);
   assert.match(h.node('signalAccelerationNote').textContent,/2 个速度变化率点/);assert.match(h.node('signalAccelerationNote').textContent,/2 项事件峰值/);
   const shock=h.calls.options.get('signalShockChart'),shockLine=shock.series[0];
-  assert.deepEqual(Array.from(shockLine.data.map(row=>row[1])),[.4,.85]);assert.deepEqual(Array.from(shockLine.markLine.data,map=>map.yAxis),[.005,.8]);assert.equal(shock.series[1].data[0][1],.9);
+  assert.deepEqual(Array.from(shockLine.data.map(row=>row[1])),[.4,.85]);assert.deepEqual(Array.from(shockLine.markLine.data,map=>map.yAxis),[.01,.8]);assert.equal(shock.series[1].data[0][1],.9);
   assert.match(h.node('signalShockNote').textContent,/0\.80 g/);assert.match(h.node('signalShockNote').textContent,/2 个三轴合成峰值偏差时间桶/);
 });
 
@@ -227,7 +227,7 @@ test('quality page labels legacy stationary records as audit-only',async()=>{
   }]}});
   h.app.renderFilterSummary();
   assert.match(h.node('filterSummary').innerHTML,/历史静止记录（仅审计）/);
-  assert.match(h.node('filterSummary').innerHTML,/v5 已改用三轴峰值偏差判定/);
+  assert.match(h.node('filterSummary').innerHTML,/v6 已改用三轴峰值偏差判定/);
 });
 
 test('quality page distinguishes historical replay from user-confirmed stationary facts',async()=>{

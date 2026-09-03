@@ -1,4 +1,4 @@
-"""Read-only v5 replay for motion-state and position quality evidence.
+"""Read-only v6 replay for motion-state and position quality evidence.
 
 The script never opens a write transaction.  It is intended for a production
 SQLite copy or a read-only URI and reports the threshold result, physical
