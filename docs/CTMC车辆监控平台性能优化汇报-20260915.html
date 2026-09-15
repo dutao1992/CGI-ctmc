@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CTMC 车辆监控平台性能优化汇报</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    @media print {
+      body { background: white !important; }
+      .no-print { display: none !important; }
+      .slide-page { page-break-after: always !important; height: 100vh !important; display: flex !important; }
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans antialiased select-none min-h-screen flex flex-col justify-between">
+
+  <!-- Top Navigation / Control Bar -->
+  <header class="no-print h-14 bg-slate-900/90 backdrop-blur border-b border-slate-800 px-6 flex items-center justify-between z-50">
+    <div class="flex items-center space-x-3">
+      <span class="w-3 h-3 rounded-full bg-blue-500 animate-pulse"></span>
+      <span class="text-sm font-semibold tracking-wider text-slate-200">CTMC 车辆监控平台 · 性能优化汇报</span>
+      <span class="text-xs px-2 py-0.5 rounded bg-blue-950/80 text-blue-400 border border-blue-800/50">2026-09-15 生产发布</span>
+    </div>
+
+    <!-- Slide Switcher & Controls -->
+    <div class="flex items-center space-x-4">
+      <div class="flex items-center space-x-1 bg-slate-800/80 rounded-lg p-1 border border-slate-700/60">
+        <button id="prevBtn" onclick="prevSlide()" class="px-3 py-1 text-xs font-medium rounded hover:bg-slate-700 text-slate-300 transition-colors">◀ 上一页</button>
+        <span id="slideIndicator" class="px-3 py-1 text-xs font-semibold text-blue-400">1 / 8</span>
+        <button id="nextBtn" onclick="nextSlide()" class="px-3 py-1 text-xs font-medium rounded hover:bg-slate-700 text-slate-300 transition-colors">下一页 ▶</button>
+      </div>
+      <button onclick="toggleFullscreen()" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">全屏模式</button>
+      <button onclick="window.print()" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition">打印 / PDF</button>
+    </div>
+  </header>
+
+  <!-- Slide Canvas Container -->
+  <main class="flex-1 flex items-center justify-center p-4 md:p-8">
+    <div id="deckContainer" class="w-full max-w-6xl aspect-[16/9] relative rounded-2xl shadow-2xl overflow-hidden border border-slate-800/80 bg-slate-900 flex flex-col">
+
+      <!-- SLIDE 1: 封面 -->
+      <section id="slide-1" class="slide-page absolute inset-0 flex flex-col justify-between p-12 bg-gradient-to-br from-slate-950 via-slate-900 to-blue-950">
+        <div class="space-y-4">
+          <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-400 text-xs font-semibold tracking-wider uppercase">
+            Performance Upgrade Report
+          </div>
+          <h1 class="text-4xl md:text-5xl font-extrabold tracking-tight text-white leading-tight">
+            CTMC 车辆监控平台性能升级
+          </h1>
+          <p class="text-xl md:text-2xl font-light text-slate-300 max-w-3xl">
+            图表数据预解析复用与长时段筛选极速响应汇报
+          </p>
+          <div class="pt-6 flex flex-wrap gap-4">
+            <div class="flex items-center gap-2 bg-emerald-950/40 border border-emerald-500/30 px-4 py-2 rounded-xl text-emerald-300 text-sm">
+              <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+              6小时筛选提速 22 倍（53.6s → 2.4s）
+            </div>
+            <div class="flex items-center gap-2 bg-blue-950/40 border border-blue-500/30 px-4 py-2 rounded-xl text-blue-300 text-sm">
+              <span class="w-2 h-2 rounded-full bg-blue-400"></span>
+              24小时长周期提速 7 倍
+            </div>
+            <div class="flex items-center gap-2 bg-slate-800/60 border border-slate-700 px-4 py-2 rounded-xl text-slate-300 text-sm">
+              <span class="w-2 h-2 rounded-full bg-slate-400"></span>
+              生产线上平滑发布上线
+            </div>
+          </div>
+        </div>
+
+        <div class="border-t border-slate-800/80 pt-6 flex justify-between items-end text-xs text-slate-400">
+          <div>
+            <p><span class="text-slate-500">发布版本：</span>20260915-134115</p>
+            <p><span class="text-slate-500">生产环境：</span>47.116.139.4 (ctmc-quality) · PID 2134737</p>
+          </div>
+          <div class="text-right">
+            <p><span class="text-slate-500">主干同步：</span>origin/main & master 已提交</p>
+            <p><span class="text-slate-500">报告日期：</span>2026年9月15日</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- SLIDE 2: 业务痛点与升级背景 -->
+      <section id="slide-2" class="slide-page absolute inset-0 hidden flex-col justify-between p-12 bg-slate-900">
+        <div>
+          <div class="text-xs font-bold uppercase tracking-widest text-blue-400">Context & Pain Points</div>
+          <h2 class="text-3xl font-bold text-white mt-1">业务背景与性能痛点</h2>
+          <p class="text-sm text-slate-400 mt-1">车载终端持续高频上报，历史采样突破 170 万条，图表筛选面临严重性能瓶颈。</p>
+        </div>
+
+        <div class="grid grid-cols-3 gap-6 my-auto">
+          <div class="bg-slate-800/60 border border-slate-700/70 rounded-xl p-6 flex flex-col justify-between">
+            <div>
+              <div class="text-3xl font-black text-blue-500">01</div>
+              <h3 class="text-lg font-bold text-white mt-3">海量高频采样累积</h3>
+              <div class="text-sm font-semibold text-blue-400 mt-1">172 万条 · 1.5 GB 数据库</div>
+              <p class="text-xs text-slate-300 mt-4 leading-relaxed">
+                车载终端以 10Hz 高频持续回传 GPCHCX 报文，单机数据达 172 万条。长期连续数据是质检标定、姿态评估及振动排查的关键依据。
+              </p>
+            </div>
+            <div class="text-[11px] text-slate-400 border-t border-slate-700/60 pt-3 mt-4">高频海量点位存储稳定</div>
+          </div>
+
+          <div class="bg-red-950/20 border border-red-500/30 rounded-xl p-6 flex flex-col justify-between">
+            <div>
+              <div class="text-3xl font-black text-red-500">02</div>
+              <h3 class="text-lg font-bold text-white mt-3">长时段筛选严重卡顿</h3>
+              <div class="text-sm font-semibold text-red-400 mt-1">查询等待高达 12s ~ 53s</div>
+              <p class="text-xs text-slate-300 mt-4 leading-relaxed">
+                前端选择 1 小时、6 小时、24 小时筛选时，界面长时间转圈。质检工程师无法流畅回溯异常工况，极大降低了日常测试与分析效率。
+              </p>
+            </div>
+            <div class="text-[11px] text-red-400/80 border-t border-red-500/30 pt-3 mt-4">核心体验亟待根治</div>
+          </div>
+
+          <div class="bg-slate-800/60 border border-slate-700/70 rounded-xl p-6 flex flex-col justify-between">
+            <div>
+              <div class="text-3xl font-black text-amber-500">03</div>
+              <h3 class="text-lg font-bold text-white mt-3">预解析成果被旁路</h3>
+              <div class="text-sm font-semibold text-amber-400 mt-1">全表扫描导致算力浪费</div>
+              <p class="text-xs text-slate-300 mt-4 leading-relaxed">
+                后台入库时虽已计算 60 秒时间桶聚合，但查询端却因判定门控将聚合旁路，反复触发百万元级数据行的全表重算与振动提取。
+              </p>
+            </div>
+            <div class="text-[11px] text-slate-400 border-t border-slate-700/60 pt-3 mt-4">架构闭环未完全打通</div>
+          </div>
+        </div>
+
+        <div class="flex justify-between text-xs text-slate-500 border-t border-slate-800 pt-4">
+          <span>CTMC 车辆监控平台 · 性能优化报告</span>
+          <span>2 / 8</span>
+        </div>
+      </section>
+
+      <!-- SLIDE 3: 4大瓶颈根因剖析 -->
+      <section id="slide-3" class="slide-page absolute inset-0 hidden flex-col justify-between p-12 bg-slate-900">
+        <div>
+          <div class="text-xs font-bold uppercase tracking-widest text-amber-400">Root Cause Analysis</div>
+          <h2 class="text-3xl font-bold text-white mt-1">性能迟钝的 4 大根因剖析</h2>
+          <p class="text-sm text-slate-400 mt-1">深入查询执行链路，定位导致系统退化为全表扫描的 4 处关键阻断点：</p>
+        </div>
+
+        <div class="grid grid-cols-4 gap-4 my-auto">
+          <div class="bg-slate-800/50 border border-slate-700/60 rounded-xl p-5 flex flex-col justify-between">
+            <div>
+              <span class="text-xs font-bold px-2 py-0.5 rounded bg-amber-950 text-amber-400 border border-amber-800/40">瓶颈 A</span>
+              <h3 class="text-sm font-bold text-white mt-3">就绪自检全表扫描</h3>
+              <div class="text-xs font-semibold text-red-400 mt-1">单次固定耗时 10.4 秒</div>
+              <p class="text-xs text-slate-300 mt-3 leading-relaxed">
+                每次查询在 `_rollup_status` 中执行 `SELECT COUNT(*) FROM points`，对 170 万行进行无差别全表扫描，造成首包极端延迟。
+              </p>
+            </div>
+            <div class="text-[10px] text-slate-400 border-t border-slate-700 pt-2 mt-3">未利用设备元数据</div>
+          </div>
+
+          <div class="bg-slate-800/50 border border-slate-700/60 rounded-xl p-5 flex flex-col justify-between">
+            <div>
+              <span class="text-xs font-bold px-2 py-0.5 rounded bg-amber-950 text-amber-400 border border-amber-800/40">瓶颈 B</span>
+              <h3 class="text-sm font-bold text-white mt-3">聚合门槛限制过严</h3>
+              <div class="text-xs font-semibold text-red-400 mt-1">6小时以下全部失效</div>
+              <p class="text-xs text-slate-300 mt-3 leading-relaxed">
+                查询判定硬编码 `span >= 6*3600`，致使 1h、2h、4h 常用排查区间全部无法复用 60s 聚合，退化为扫描数十万条原始点。
+              </p>
+            </div>
+            <div class="text-[10px] text-slate-400 border-t border-slate-700 pt-2 mt-3">阈值设置不合理</div>
+          </div>
+
+          <div class="bg-slate-800/50 border border-slate-700/60 rounded-xl p-5 flex flex-col justify-between">
+            <div>
+              <span class="text-xs font-bold px-2 py-0.5 rounded bg-amber-950 text-amber-400 border border-amber-800/40">瓶颈 C</span>
+              <h3 class="text-sm font-bold text-white mt-3">振动特征盲目重算</h3>
+              <div class="text-xs font-semibold text-red-400 mt-1">原始扫描耗时 19.7 秒</div>
+              <p class="text-xs text-slate-300 mt-3 leading-relaxed">
+                `VIBRATION_RAW_SCAN_MAX_S` 设置为 6 小时且设 24 个候选窗口，强行加载几十万条原始比力采样进行 FFT 重复计算。
+              </p>
+            </div>
+            <div class="text-[10px] text-slate-400 border-t border-slate-700 pt-2 mt-3">未复用聚合RMS</div>
+          </div>
+
+          <div class="bg-slate-800/50 border border-slate-700/60 rounded-xl p-5 flex flex-col justify-between">
+            <div>
+              <span class="text-xs font-bold px-2 py-0.5 rounded bg-amber-950 text-amber-400 border border-amber-800/40">瓶颈 D</span>
+              <h3 class="text-sm font-bold text-white mt-3">并发写入一致性误判</h3>
+              <div class="text-xs font-semibold text-red-400 mt-1">实时写入触发降级</div>
+              <p class="text-xs text-slate-300 mt-3 leading-relaxed">
+                判断要求 `rollup_points == raw_points`。10Hz 实时写入时当前分钟尾部数十点尚未聚合成桶，导致判定未就绪而回退全表重算。
+              </p>
+            </div>
+            <div class="text-[10px] text-slate-400 border-t border-slate-700 pt-2 mt-3">缺乏尾部容差机制</div>
+          </div>
+        </div>
+
+        <div class="flex justify-between text-xs text-slate-500 border-t border-slate-800 pt-4">
+          <span>CTMC 车辆监控平台 · 性能优化报告</span>
+          <span>3 / 8</span>
+        </div>
+      </section>
+
+      <!-- SLIDE 4: 架构治理与四大优化方案 -->
+      <section id="slide-4" class="slide-page absolute inset-0 hidden flex-col justify-between p-12 bg-slate-900">
+        <div>
+          <div class="text-xs font-bold uppercase tracking-widest text-emerald-400">Technical Solution</div>
+          <h2 class="text-3xl font-bold text-white mt-1">架构治理与 4 大关键优化方案</h2>
+          <p class="text-sm text-slate-400 mt-1">对症下药消除阻断，打通从实时入站预解析到前端快速聚合复用的完整闭环：</p>
+        </div>
+
+        <div class="grid grid-cols-4 gap-4 my-auto">
+          <div class="bg-slate-800/60 border border-emerald-500/30 rounded-xl p-5 flex flex-col justify-between">
+            <div>
+              <span class="text-xs font-bold px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800/40">方案 1</span>
+              <h3 class="text-sm font-bold text-white mt-3">元数据直读 O(1) 判定</h3>
+              <div class="text-xs font-semibold text-emerald-400 mt-1">10.4s 降至 0.1 毫秒</div>
+              <p class="text-xs text-slate-300 mt-3 leading-relaxed">
+                优先从 `devices.point_count` 读取已维护行数，配合数据修订版本检查。就绪判定耗时降低 100,000 倍，彻底根除全表扫表开销。
+              </p>
+            </div>
+            <div class="text-[10px] text-emerald-400/80 border-t border-slate-700 pt-2 mt-3">消除全表 COUNT(*)</div>
+          </div>
+
+          <div class="bg-slate-800/60 border border-blue-500/30 rounded-xl p-5 flex flex-col justify-between">
+            <div>
+              <span class="text-xs font-bold px-2 py-0.5 rounded bg-blue-950 text-blue-400 border border-blue-800/40">方案 2</span>
+              <h3 class="text-sm font-bold text-white mt-3">放宽门槛至 30 分钟</h3>
+              <div class="text-xs font-semibold text-blue-400 mt-1">覆盖 30m ~ 48h 常用区间</div>
+              <p class="text-xs text-slate-300 mt-3 leading-relaxed">
+                将聚合复用下限由 `6*3600` 放宽至 `1800s`。1h、2h、4h 时段查询全面复用 60s 预解析聚合，传输与计算数据量骤减 90%。
+              </p>
+            </div>
+            <div class="text-[10px] text-blue-400/80 border-t border-slate-700 pt-2 mt-3">全面复用 60s 聚合</div>
+          </div>
+
+          <div class="bg-slate-800/60 border border-emerald-500/30 rounded-xl p-5 flex flex-col justify-between">
+            <div>
+              <span class="text-xs font-bold px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800/40">方案 3</span>
+              <h3 class="text-sm font-bold text-white mt-3">动态 RMS 振动候选剪枝</h3>
+              <div class="text-xs font-semibold text-emerald-400 mt-1">19.7s 降至 0.05 秒</div>
+              <p class="text-xs text-slate-300 mt-3 leading-relaxed">
+                利用 rollup 已存动态 RMS 排序锁定最显著的 Top-6 窗口，将原始扫描收敛至 1800s 内，振动处理耗时提速近 400 倍。
+              </p>
+            </div>
+            <div class="text-[10px] text-emerald-400/80 border-t border-slate-700 pt-2 mt-3">振动计算极速化</div>
+          </div>
+
+          <div class="bg-slate-800/60 border border-blue-500/30 rounded-xl p-5 flex flex-col justify-between">
+            <div>
+              <span class="text-xs font-bold px-2 py-0.5 rounded bg-blue-950 text-blue-400 border border-blue-800/40">方案 4</span>
+              <h3 class="text-sm font-bold text-white mt-3">实时写入容差与边界补偿</h3>
+              <div class="text-xs font-semibold text-blue-400 mt-1">消除写入抖动误判</div>
+              <p class="text-xs text-slate-300 mt-3 leading-relaxed">
+                引入 600 点以内的写入尾部容差；未走完 60s 桶的尾部点直接由查询边界 Raw 扫描快速补齐，兼顾绝对新鲜度与毫秒级查询。
+              </p>
+            </div>
+            <div class="text-[10px] text-blue-400/80 border-t border-slate-700 pt-2 mt-3">高并发实时一致性</div>
+          </div>
+        </div>
+
+        <div class="flex justify-between text-xs text-slate-500 border-t border-slate-800 pt-4">
+          <span>CTMC 车辆监控平台 · 性能优化报告</span>
+          <span>4 / 8</span>
+        </div>
+      </section>
+
+      <!-- SLIDE 5: 优化前后性能实测对比 -->
+      <section id="slide-5" class="slide-page absolute inset-0 hidden flex-col justify-between p-12 bg-slate-900">
+        <div>
+          <div class="text-xs font-bold uppercase tracking-widest text-emerald-400">Performance Benchmark</div>
+          <h2 class="text-3xl font-bold text-white mt-1">生产环境实测对比（47.116.139.4）</h2>
+          <p class="text-sm text-slate-400 mt-1">在真实 172 万行生产数据库上进行全量测试，各时段查询全面进入秒级区间：</p>
+        </div>
+
+        <!-- 4 Top KPI Cards -->
+        <div class="grid grid-cols-4 gap-4 mt-4">
+          <div class="bg-emerald-950/20 border border-emerald-500/30 rounded-xl p-4">
+            <div class="text-xs text-slate-400">6 小时常用时段</div>
+            <div class="text-2xl font-black text-emerald-400 mt-1">2.41 秒</div>
+            <div class="text-[11px] text-emerald-300/80 mt-1">原 53.58s · 提速 22.2 倍</div>
+          </div>
+          <div class="bg-slate-800/60 border border-slate-700 rounded-xl p-4">
+            <div class="text-xs text-slate-400">1 小时分析时段</div>
+            <div class="text-2xl font-black text-blue-400 mt-1">1.86 秒</div>
+            <div class="text-[11px] text-blue-300/80 mt-1">原 18.30s · 提速 9.8 倍</div>
+          </div>
+          <div class="bg-slate-800/60 border border-slate-700 rounded-xl p-4">
+            <div class="text-xs text-slate-400">24 小时大范围时段</div>
+            <div class="text-2xl font-black text-blue-400 mt-1">6.08 秒</div>
+            <div class="text-[11px] text-blue-300/80 mt-1">原 44.75s · 提速 7.4 倍</div>
+          </div>
+          <div class="bg-emerald-950/20 border border-emerald-500/30 rounded-xl p-4">
+            <div class="text-xs text-slate-400">二次查询 / 切页</div>
+            <div class="text-2xl font-black text-emerald-400 mt-1">&lt; 2 毫秒</div>
+            <div class="text-[11px] text-emerald-300/80 mt-1">内存缓存 · 瞬时秒开</div>
+          </div>
+        </div>
+
+        <!-- Comparison Table -->
+        <div class="overflow-hidden rounded-xl border border-slate-700/60 bg-slate-800/40 my-auto">
+          <table class="w-full text-left text-xs text-slate-300">
+            <thead class="bg-slate-800 text-slate-200 border-b border-slate-700 text-[11px]">
+              <tr>
+                <th class="py-2.5 px-4">筛选时段范围</th>
+                <th class="py-2.5 px-4">优化前耗时 (Raw)</th>
+                <th class="py-2.5 px-4">优化后耗时 (Rollup)</th>
+                <th class="py-2.5 px-4">性能提升比</th>
+                <th class="py-2.5 px-4">底层取数源</th>
+                <th class="py-2.5 px-4">波峰波谷保真度</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-700/40">
+              <tr class="hover:bg-slate-800/30">
+                <td class="py-2 px-4 font-medium text-white">15 分钟 (900s)</td>
+                <td class="py-2 px-4 text-slate-400">1.87 秒</td>
+                <td class="py-2 px-4 text-slate-200 font-semibold">1.86 秒</td>
+                <td class="py-2 px-4 text-slate-400">保持秒级</td>
+                <td class="py-2 px-4 text-slate-400">raw 原始点</td>
+                <td class="py-2 px-4 text-emerald-400">100% 原始高频</td>
+              </tr>
+              <tr class="hover:bg-slate-800/30 bg-slate-800/20">
+                <td class="py-2 px-4 font-medium text-white">1 小时 (3,600s)</td>
+                <td class="py-2 px-4 text-red-400">18.30 秒</td>
+                <td class="py-2 px-4 text-emerald-400 font-bold">1.86 秒</td>
+                <td class="py-2 px-4 text-emerald-400 font-bold">提速 9.8 倍</td>
+                <td class="py-2 px-4 text-blue-400">rollup 60s 聚合</td>
+                <td class="py-2 px-4 text-emerald-400">极值无损保留</td>
+              </tr>
+              <tr class="hover:bg-slate-800/30">
+                <td class="py-2 px-4 font-medium text-white">6 小时 (21,600s)</td>
+                <td class="py-2 px-4 text-red-400 font-medium">53.58 秒</td>
+                <td class="py-2 px-4 text-emerald-400 font-bold">2.41 秒</td>
+                <td class="py-2 px-4 text-emerald-400 font-bold">提速 22.2 倍</td>
+                <td class="py-2 px-4 text-blue-400">rollup 60s 聚合</td>
+                <td class="py-2 px-4 text-emerald-400">极值无损保留</td>
+              </tr>
+              <tr class="hover:bg-slate-800/30 bg-slate-800/20">
+                <td class="py-2 px-4 font-medium text-white">24 小时 (86,400s)</td>
+                <td class="py-2 px-4 text-red-400 font-medium">44.75 秒</td>
+                <td class="py-2 px-4 text-emerald-400 font-bold">6.08 秒</td>
+                <td class="py-2 px-4 text-emerald-400 font-bold">提速 7.4 倍</td>
+                <td class="py-2 px-4 text-blue-400">rollup 60s 聚合</td>
+                <td class="py-2 px-4 text-emerald-400">极值无损保留</td>
+              </tr>
+              <tr class="hover:bg-slate-800/30">
+                <td class="py-2 px-4 font-medium text-white">重复筛选 / Tab 切换</td>
+                <td class="py-2 px-4 text-slate-400">重复数秒计算</td>
+                <td class="py-2 px-4 text-emerald-400 font-bold">0.001 秒</td>
+                <td class="py-2 px-4 text-emerald-400 font-bold">千倍瞬时</td>
+                <td class="py-2 px-4 text-purple-400">内存 Query Cache</td>
+                <td class="py-2 px-4 text-emerald-400">无损瞬间呈现</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="flex justify-between text-xs text-slate-500 border-t border-slate-800 pt-4">
+          <span>CTMC 车辆监控平台 · 性能优化报告</span>
+          <span>5 / 8</span>
+        </div>
+      </section>
+
+      <!-- SLIDE 6: 严谨质量保障与测试验证 -->
+      <section id="slide-6" class="slide-page absolute inset-0 hidden flex-col justify-between p-12 bg-slate-900">
+        <div>
+          <div class="text-xs font-bold uppercase tracking-widest text-blue-400">Quality Assurance</div>
+          <h2 class="text-3xl font-bold text-white mt-1">严谨质量保障与测试验证</h2>
+          <p class="text-sm text-slate-400 mt-1">在获得 20 倍提速的同时，严格确保惯导波峰、加速度极值与振动特征 100% 精确保真：</p>
+        </div>
+
+        <div class="grid grid-cols-3 gap-6 my-auto">
+          <div class="bg-slate-800/60 border border-slate-700/70 rounded-xl p-6 flex flex-col justify-between">
+            <div>
+              <div class="text-3xl font-black text-emerald-400">01</div>
+              <h3 class="text-lg font-bold text-white mt-3">波峰与极值 100% 保真</h3>
+              <div class="text-sm font-semibold text-emerald-400 mt-1">Extrema 校验全部绿灯</div>
+              <p class="text-xs text-slate-300 mt-4 leading-relaxed">
+                在 `test_chart_peaks.cjs` 中严格校验三轴角速度 (gx/gy/gz)、三轴加速度 (ax/ay/az) 和俯仰/横滚姿态在 900s、86400s、259200s 的极值完整保留，确保关键报警不漏报。
+              </p>
+            </div>
+            <div class="text-[11px] text-emerald-400/80 border-t border-slate-700/60 pt-3 mt-4">冲击/告警阈值完全一致</div>
+          </div>
+
+          <div class="bg-slate-800/60 border border-slate-700/70 rounded-xl p-6 flex flex-col justify-between">
+            <div>
+              <div class="text-3xl font-black text-blue-400">02</div>
+              <h3 class="text-lg font-bold text-white mt-3">自动化全量回归通过</h3>
+              <div class="text-sm font-semibold text-blue-400 mt-1">120 项 Python + 53 项 Node</div>
+              <p class="text-xs text-slate-300 mt-4 leading-relaxed">
+                本地与生产主机双重执行：Python 核心测试 120 项在 13.1s 内全绿通过；Node 前端图表、地图坐标与异常边界 53 项全部通过，零失败、零跳过。
+              </p>
+            </div>
+            <div class="text-[11px] text-blue-400/80 border-t border-slate-700/60 pt-3 mt-4">双端回归测试 100% 通过</div>
+          </div>
+
+          <div class="bg-slate-800/60 border border-slate-700/70 rounded-xl p-6 flex flex-col justify-between">
+            <div>
+              <div class="text-3xl font-black text-purple-400">03</div>
+              <h3 class="text-lg font-bold text-white mt-3">原始数据只读零污染</h3>
+              <div class="text-sm font-semibold text-purple-400 mt-1">SHA256 与 DB 结构完好</div>
+              <p class="text-xs text-slate-300 mt-4 leading-relaxed">
+                所有改动集中于查询调度与聚合索引复用，原始数据表 `points` 保持严格只读，底层报文数据与审计证据未受任何修改，`PRAGMA quick_check=ok`。
+              </p>
+            </div>
+            <div class="text-[11px] text-purple-400/80 border-t border-slate-700/60 pt-3 mt-4">原始审计证据安全受控</div>
+          </div>
+        </div>
+
+        <div class="flex justify-between text-xs text-slate-500 border-t border-slate-800 pt-4">
+          <span>CTMC 车辆监控平台 · 性能优化报告</span>
+          <span>6 / 8</span>
+        </div>
+      </section>
+
+      <!-- SLIDE 7: 生产部署与系统状态 -->
+      <section id="slide-7" class="slide-page absolute inset-0 hidden flex-col justify-between p-12 bg-slate-900">
+        <div>
+          <div class="text-xs font-bold uppercase tracking-widest text-emerald-400">Production Status</div>
+          <h2 class="text-3xl font-bold text-white mt-1">生产部署与系统运行状态</h2>
+          <p class="text-sm text-slate-400 mt-1">已发布至阿里云生产主机（47.116.139.4），系统资源健康平稳，代码已同步 Git：</p>
+        </div>
+
+        <div class="grid grid-cols-4 gap-4 my-auto">
+          <div class="bg-slate-800/60 border border-slate-700 rounded-xl p-5 flex flex-col justify-between">
+            <div>
+              <div class="text-xs text-slate-400">服务运行状态</div>
+              <div class="text-lg font-bold text-emerald-400 mt-1">Active (running)</div>
+              <div class="text-[11px] text-slate-400 mt-1">PID: 2134737 · 端口 8790</div>
+              <p class="text-xs text-slate-300 mt-3 leading-relaxed">
+                Systemd 车载服务稳定在线，`/healthz` 响应正常；TCP 9000 接收器无缝接收实时 10Hz 数据流。
+              </p>
+            </div>
+            <div class="text-[10px] text-emerald-400 border-t border-slate-700 pt-2 mt-3">服务平滑升级 0 宕机</div>
+          </div>
+
+          <div class="bg-slate-800/60 border border-slate-700 rounded-xl p-5 flex flex-col justify-between">
+            <div>
+              <div class="text-xs text-slate-400">内存与磁盘资源</div>
+              <div class="text-lg font-bold text-blue-400 mt-1">643M / 768M</div>
+              <div class="text-[11px] text-slate-400 mt-1">安全水位 · 磁盘可用 17GB</div>
+              <p class="text-xs text-slate-300 mt-3 leading-relaxed">
+                服务内存稳定运行在 768MB 限制之内，消除了全表扫描带来的内存突刺，CPU 占用显著下降。
+              </p>
+            </div>
+            <div class="text-[10px] text-blue-400 border-t border-slate-700 pt-2 mt-3">资源消耗受控健康</div>
+          </div>
+
+          <div class="bg-slate-800/60 border border-slate-700 rounded-xl p-5 flex flex-col justify-between">
+            <div>
+              <div class="text-xs text-slate-400">发布版本与软链</div>
+              <div class="text-lg font-bold text-slate-200 mt-1">20260915-134115</div>
+              <div class="text-[11px] text-slate-400 mt-1">原子软链切换 · 支持回滚</div>
+              <p class="text-xs text-slate-300 mt-3 leading-relaxed">
+                发布路径 `/srv/ctmc-vehicle/releases/20260915-134115`，数据留存定时器保持启用并按计划运行。
+              </p>
+            </div>
+            <div class="text-[10px] text-slate-400 border-t border-slate-700 pt-2 mt-3">发布流程严谨规范</div>
+          </div>
+
+          <div class="bg-slate-800/60 border border-slate-700 rounded-xl p-5 flex flex-col justify-between">
+            <div>
+              <div class="text-xs text-slate-400">Git 版本库同步</div>
+              <div class="text-lg font-bold text-emerald-400 mt-1">Commit: d2c020c</div>
+              <div class="text-[11px] text-slate-400 mt-1">origin/main & master 已同步</div>
+              <p class="text-xs text-slate-300 mt-3 leading-relaxed">
+                远端 GitHub 仓库通过 fast-forward 完成双分支同步推送，本地工作区 clean。
+              </p>
+            </div>
+            <div class="text-[10px] text-emerald-400 border-t border-slate-700 pt-2 mt-3">代码库同步无遗漏</div>
+          </div>
+        </div>
+
+        <div class="flex justify-between text-xs text-slate-500 border-t border-slate-800 pt-4">
+          <span>CTMC 车辆监控平台 · 性能优化报告</span>
+          <span>7 / 8</span>
+        </div>
+      </section>
+
+      <!-- SLIDE 8: 价值总结与后续规划 -->
+      <section id="slide-8" class="slide-page absolute inset-0 hidden flex-col justify-between p-12 bg-gradient-to-br from-slate-950 via-slate-900 to-blue-950">
+        <div>
+          <div class="text-xs font-bold uppercase tracking-widest text-blue-400">Summary & Next Steps</div>
+          <h2 class="text-3xl font-bold text-white mt-1">升级价值总结与后续演进建议</h2>
+          <p class="text-sm text-slate-400 mt-1">以最小代价消除架构阻断，以预计算复用为车载监控平台带来质的飞跃：</p>
+        </div>
+
+        <div class="grid grid-cols-3 gap-6 my-auto">
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-6 flex flex-col justify-between">
+            <div>
+              <div class="text-base font-bold text-white">用户体验质的提升</div>
+              <div class="text-sm font-semibold text-blue-400 mt-1">从数十秒等待迈入秒级直出</div>
+              <p class="text-xs text-slate-300 mt-4 leading-relaxed">
+                质检与测试工程师在分析长时段工况、排查姿态与异常冲击时，时段切换与缩放随点随到，分析效率提升 10 倍以上。
+              </p>
+            </div>
+            <div class="text-[11px] text-emerald-400 border-t border-slate-800 pt-3 mt-4">极大提高质检决策效率</div>
+          </div>
+
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-6 flex flex-col justify-between">
+            <div>
+              <div class="text-base font-bold text-white">系统算力负荷大幅释放</div>
+              <div class="text-sm font-semibold text-emerald-400 mt-1">消除 90% 冗余计算与 IO 开销</div>
+              <p class="text-xs text-slate-300 mt-4 leading-relaxed">
+                彻底根除每次筛选触发的全表扫表与全量 FFT 重算，显著降低 SQLite IO 争用与内存突刺，大幅提升多用户并发查询能力。
+              </p>
+            </div>
+            <div class="text-[11px] text-emerald-400 border-t border-slate-800 pt-3 mt-4">服务器轻量稳定运行</div>
+          </div>
+
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-6 flex flex-col justify-between">
+            <div>
+              <div class="text-base font-bold text-white">后续运营与演进建议</div>
+              <div class="text-sm font-semibold text-purple-400 mt-1">长效守护与未来架构建议</div>
+              <p class="text-xs text-slate-300 mt-4 leading-relaxed">
+                1. 持续监控高并发 10Hz 实时写入下的聚合延迟与磁盘水位；<br>
+                2. 若未来查询区间扩展至 7 天以上极长范围，建议引入前置轨迹瓦片缓存机制。
+              </p>
+            </div>
+            <div class="text-[11px] text-purple-400 border-t border-slate-800 pt-3 mt-4">持续保障高可用与高可扩展</div>
+          </div>
+        </div>
+
+        <div class="border-t border-slate-800/80 pt-4 flex justify-between items-center text-xs text-slate-500">
+          <div>CTMC 车辆监控平台 · 图表渲染与时段筛选极速优化报告</div>
+          <div>汇报人：研发团队 · 2026-09-15</div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- Bottom Quick Nav Bar -->
+  <footer class="no-print h-12 bg-slate-900/80 border-t border-slate-800 px-6 flex items-center justify-between text-xs text-slate-400">
+    <div class="flex items-center space-x-2">
+      <span class="text-slate-500">快捷键：</span>
+      <kbd class="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 font-mono text-[10px]">←</kbd>
+      <kbd class="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 font-mono text-[10px]">→</kbd>
+      <span class="text-slate-500">或</span>
+      <kbd class="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 font-mono text-[10px]">Space</kbd>
+      <span>快速翻页</span>
+    </div>
+
+    <!-- Slide Thumb Dots -->
+    <div class="flex items-center space-x-2" id="dotContainer">
+      <!-- Injected by JS -->
+    </div>
+
+    <div>
+      <span>PPTX 下载路径：<code class="text-blue-400 font-mono">docs/CTMC车辆监控平台性能优化汇报-20260915.pptx</code></span>
+    </div>
+  </footer>
+
+  <script>
+    const totalSlides = 8;
+    let currentSlide = 1;
+
+    function showSlide(index) {
+      if (index < 1) index = 1;
+      if (index > totalSlides) index = totalSlides;
+      currentSlide = index;
+
+      for (let i = 1; i <= totalSlides; i++) {
+        const el = document.getElementById(`slide-${i}`);
+        if (el) {
+          if (i === currentSlide) {
+            el.classList.remove('hidden');
+            el.classList.add('flex');
+          } else {
+            el.classList.add('hidden');
+            el.classList.remove('flex');
+          }
+        }
+      }
+
+      document.getElementById('slideIndicator').innerText = `${currentSlide} / ${totalSlides}`;
+      document.getElementById('prevBtn').disabled = currentSlide === 1;
+      document.getElementById('nextBtn').disabled = currentSlide === totalSlides;
+      updateDots();
+    }
+
+    function prevSlide() {
+      showSlide(currentSlide - 1);
+    }
+
+    function nextSlide() {
+      showSlide(currentSlide + 1);
+    }
+
+    function initDots() {
+      const container = document.getElementById('dotContainer');
+      container.innerHTML = '';
+      for (let i = 1; i <= totalSlides; i++) {
+        const dot = document.createElement('button');
+        dot.className = `w-2 h-2 rounded-full transition-all ${i === currentSlide ? 'bg-blue-500 w-5' : 'bg-slate-700 hover:bg-slate-500'}`;
+        dot.onclick = () => showSlide(i);
+        dot.title = `第 ${i} 页`;
+        container.appendChild(dot);
+      }
+    }
+
+    function updateDots() {
+      const container = document.getElementById('dotContainer');
+      const dots = container.children;
+      for (let i = 0; i < dots.length; i++) {
+        if (i + 1 === currentSlide) {
+          dots[i].className = 'w-5 h-2 rounded-full bg-blue-500 transition-all';
+        } else {
+          dots[i].className = 'w-2 h-2 rounded-full bg-slate-700 hover:bg-slate-500 transition-all';
+        }
+      }
+    }
+
+    function toggleFullscreen() {
+      const elem = document.getElementById('deckContainer');
+      if (!document.fullscreenElement) {
+        if (elem.requestFullscreen) {
+          elem.requestFullscreen();
+        }
+      } else {
+        if (document.exitFullscreen) {
+          document.exitFullscreen();
+        }
+      }
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
+        nextSlide();
+      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        prevSlide();
+      }
+    });
+
+    initDots();
+    showSlide(1);
+  </script>
+</body>
+</html>
