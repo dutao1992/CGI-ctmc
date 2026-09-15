@@ -1,0 +1,589 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="总厂、新场、锦晨互联网共享零件级质量追溯平台">
+  <meta name="theme-color" content="#10251f">
+  <title>质量追溯云台 · 三地共享</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css?v=27">
+</head>
+<body class="auth-pending">
+  <section id="loginScreen" class="login-screen" aria-labelledby="loginTitle">
+    <div class="login-atmosphere" aria-hidden="true"><i></i><i></i><i></i></div>
+    <div class="login-brand"><span class="brand-mark"><i></i><i></i><i></i></span><div><b>CTMC TRACE CLOUD</b><small>总厂 · 新场 · 锦晨共享质量链</small></div></div>
+    <form id="loginForm" class="login-card">
+      <p class="eyebrow">SECURE QUALITY WORKSPACE</p>
+      <h1 id="loginTitle">进入质量追溯云台</h1>
+      <p>生产数据集中存储，账号按站点授权；每次收货、绑定和异常处置都会记录真实登录身份。</p>
+      <label><span>用户名</span><input name="username" autocomplete="username" required autofocus placeholder="请输入账号"></label>
+      <label><span>密码</span><input name="password" type="password" autocomplete="current-password" required placeholder="请输入密码"></label>
+      <button class="primary-button" type="submit">安全登录 <b>→</b></button>
+      <div class="login-trust"><span>HTTPS 加密传输</span><span>站点数据隔离</span><span>操作全程留痕</span></div>
+    </form>
+    <a class="portal-back" href="/">← 返回质量数字化主页</a>
+  </section>
+
+  <div id="appShell" class="app-shell">
+    <aside class="sidebar" aria-label="主导航">
+      <a class="brand" href="#dashboard" data-nav="dashboard" aria-label="返回总览">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span><strong>质溯云台</strong><small>SHARED TRACE NETWORK</small></span>
+      </a>
+
+      <div class="site-chip">
+        <span class="pulse" aria-hidden="true"></span>
+        <span><small>当前数据视图</small><strong id="siteName">正在加载</strong></span>
+        <b id="siteCode">--</b>
+      </div>
+
+      <nav class="nav-list">
+        <button class="nav-item active" type="button" data-nav="dashboard">
+          <span class="nav-icon">01</span><span>运行总览</span>
+        </button>
+        <button class="nav-item" type="button" data-nav="board">
+          <span class="nav-icon">02</span><span>追溯看板</span>
+        </button>
+        <button class="nav-item" type="button" data-nav="trace">
+          <span class="nav-icon">03</span><span>追溯查询</span>
+        </button>
+        <button class="nav-item" type="button" data-nav="bind">
+          <span class="nav-icon">04</span><span>现场绑定</span>
+        </button>
+        <button class="nav-item" type="button" data-nav="access">
+          <span class="nav-icon">05</span><span>身份同步</span>
+        </button>
+        <button class="nav-item" type="button" data-nav="admin-data">
+          <span class="nav-icon">06</span><span>业务数据管理</span>
+        </button>
+        <button class="nav-item" type="button" data-nav="exchange">
+          <span class="nav-icon">07</span><span>系统维护</span>
+        </button>
+        <button class="nav-item" type="button" data-nav="master">
+          <span class="nav-icon">08</span><span>追溯清单</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-note">
+        <span>ONLINE SHARED</span>
+        <p>总厂、新场、锦晨共用中心数据链；账号权限自动隔离站点。</p>
+      </div>
+    </aside>
+
+    <main class="main-panel">
+      <datalist id="componentOrderOptions"></datalist>
+      <header class="topbar">
+        <div>
+          <p class="breadcrumb">零件级质量追溯 / <span id="viewCrumb">运行总览</span></p>
+          <h1 id="viewTitle">运行总览</h1>
+        </div>
+        <div class="topbar-actions">
+          <label class="site-switcher hidden" id="siteSwitcherWrap"><span>数据视图</span><select id="siteSwitcher"></select></label>
+          <span class="network-badge"><i></i> 三地在线共享</span>
+          <button class="ghost-button" type="button" data-nav="trace">快速查询 <kbd>/</kbd></button>
+          <div class="account-menu"><button type="button" id="accountButton"><span id="accountAvatar">管</span><b id="accountName">正在登录</b></button><div><small id="accountMeta">—</small><button type="button" id="logoutButton">退出登录</button></div></div>
+        </div>
+      </header>
+      <button id="capacityAlert" class="capacity-alert hidden" type="button" data-nav="exchange">
+        <span>服务器容量预警</span>
+        <b id="capacityAlertText">请下载完整备份并执行安全缓存清理</b>
+        <i>立即处理 →</i>
+      </button>
+
+      <section class="view active" id="view-dashboard" data-title="运行总览">
+        <div class="hero-grid">
+          <article class="hero-card">
+            <div class="hero-copy">
+              <p class="eyebrow">WBS → 部件订单 → 工序 → 唯一零件</p>
+              <h2>一次扫码，<br><em>贯通整条装配链。</em></h2>
+              <p>装配订单展开质量追溯需求，生产或采购零件码经SRM清单识别后现场核销；总厂、新场、锦晨共享同一套实时数据。</p>
+              <div class="hero-actions">
+                <button class="primary-button" type="button" data-nav="bind" data-bind-entry>开始现场绑定</button>
+                <button class="text-button" type="button" data-nav="trace">扫描零件码查询 →</button>
+              </div>
+            </div>
+            <div class="hero-signal" aria-hidden="true">
+              <div class="signal-ring ring-one"></div>
+              <div class="signal-ring ring-two"></div>
+              <div class="signal-core"><span>ONLINE</span><strong id="heroSiteCode">ALL</strong></div>
+              <div class="signal-label label-a">清单</div>
+              <div class="signal-label label-b">SRM</div>
+              <div class="signal-label label-c">绑定</div>
+            </div>
+          </article>
+
+          <aside class="attention-card catalog-summary">
+            <div class="attention-head"><span>主数据版本</span><b id="catalogPartCount">0</b></div>
+            <h3>最新追溯清单</h3>
+            <p id="catalogImportMeta">正在读取导入记录…</p>
+            <button class="light-button" type="button" data-nav="master">查看清单与导入告警</button>
+          </aside>
+        </div>
+
+        <div class="stat-grid" id="statGrid" aria-label="运行指标"></div>
+
+        <div class="content-grid">
+          <article class="panel trace-panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">PROCESS CONTROL</p><h3>共享追溯链路</h3></div>
+              <span class="quiet-label">先绑定 · 后安装</span>
+            </div>
+            <div class="trace-rail trace-rail-three">
+              <div class="rail-line"></div>
+              <div class="rail-node done"><span>1</span><strong>双清单建链</strong><small>部件需求 + SRM实物</small></div>
+              <div class="rail-node active"><span>2</span><strong>现场连续绑定</strong><small>扫码即识别并消减</small></div>
+              <div class="rail-node"><span>3</span><strong>开始装配</strong><small>零遗漏后放行</small></div>
+            </div>
+          </article>
+
+          <article class="panel event-panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">LATEST EVENTS</p><h3>最近操作</h3></div>
+              <button class="icon-button" type="button" id="refreshDashboard" aria-label="刷新">↻</button>
+            </div>
+            <div id="recentEvents" class="event-list empty-state">暂无操作记录</div>
+          </article>
+        </div>
+      </section>
+
+      <section class="view" id="view-board" data-title="追溯看板">
+        <div class="board-header">
+          <div><p class="eyebrow">TRACE INTELLIGENCE · LIVE OPERATIONS</p><h2>从装配进度，看到每一条质量链。</h2><p>所有图表使用中心库实时汇总，可随右上角站点视图联动。</p></div>
+          <button class="secondary-button" type="button" id="refreshBoard">刷新看板</button>
+        </div>
+        <div class="board-kpis" id="boardKpis"></div>
+        <article id="boardEmptyGuide" class="board-empty-guide hidden"><span>01</span><div><p class="eyebrow">FIRST TRACE CHAIN</p><h3>完成首个现场绑定后生成分析看板</h3><p>当前没有已绑定零件。先导入两份清单并完成一笔现场绑定，系统将自动生成完成率、站点、录入方式和趋势分析。</p></div><div><button class="primary-button" type="button" data-nav="master">检查追溯清单</button><button class="secondary-button" type="button" data-nav="trace">进入追溯查询</button></div></article>
+        <div class="chart-grid" id="boardChartGrid">
+          <article class="chart-card chart-wide"><header><div><h3>装配订单绑定状态</h3><p>当前有效部件追溯清单，单位：装配订单</p></div></header><div id="statusChart" class="donut-chart"></div></article>
+          <article class="chart-card chart-wide"><header><div><h3>功能部件需求与完成量</h3><p>需求量排名前8，单位：质量追溯零件</p></div></header><div id="componentChart" class="bar-chart"></div></article>
+          <article class="chart-card"><header><div><h3>各站点绑定量</h3><p>按已完成绑定零件统计</p></div></header><div id="siteChart" class="bar-chart compact"></div></article>
+          <article class="chart-card"><header><div><h3>录入方式分布</h3><p>扫码枪、摄像头与手工兜底</p></div></header><div id="methodChart" class="bar-chart compact"></div></article>
+          <article class="chart-card chart-wide"><header><div><h3>近14日绑定趋势</h3><p>按批次确认日汇总，单位：零件</p></div></header><div id="dailyChart" class="line-chart"></div></article>
+          <article class="chart-card chart-wide"><header><div><h3>操作人员绑定量</h3><p>已完成绑定零件数排名前8</p></div></header><div id="operatorChart" class="bar-chart"></div></article>
+        </div>
+      </section>
+
+      <section class="view" id="view-trace" data-title="追溯查询">
+        <article class="search-stage">
+          <div>
+            <p class="eyebrow">ONE CODE · FULL CHAIN</p>
+            <h2>扫描零件码，直达完整链条</h2>
+            <p>生产件使用“2500生产订单 + 序列号”；采购件使用“4500采购订单 + 行号 + 序列号”。</p>
+          </div>
+          <form id="traceForm" class="trace-search part-code-search">
+            <label>
+              <span>零件唯一识别码</span>
+              <input id="tracePartCode" name="part_code" autocomplete="off" placeholder="例：25000372978|0082 或 4500506806|5960|0034" required>
+            </label>
+            <button class="camera-scan-button" type="button" data-scan-kind="part" data-scan-input="#tracePartCode">▦ 扫码</button>
+            <button class="trace-submit-button" type="submit">查询追溯链 <span aria-hidden="true">→</span></button>
+          </form>
+        </article>
+        <div id="traceResults" class="trace-results">
+          <div class="blank-slate"><span>⌁</span><h3>等待查询</h3><p>结果将展示零件、工序、部件订单、WBS、发放与绑定记录。</p></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-issue" data-title="仓库发放">
+        <div class="batch-workspace issue-workspace">
+          <header class="batch-hero">
+            <div><p class="eyebrow">WAREHOUSE · BATCH ISSUE</p><h2>仓库扫码发放</h2><p>先扫描或输入部件/装配订单，再连续扫描本批全部零件。确认前只暂存，不改变零件状态。</p></div>
+            <span class="step-badge">阶段 1 / 2</span>
+          </header>
+          <div class="batch-grid">
+            <article class="batch-input-card">
+              <form id="issueStageForm" class="stack-form">
+                <label class="field"><span>部件/装配订单号 *</span><div class="scan-control"><input name="component_order_no" id="issueOrderInput" list="componentOrderOptions" autocomplete="off" placeholder="2000…" required><button class="field-scan-button" type="button" data-scan-kind="order" data-scan-input="#issueOrderInput">▦ 扫码</button></div></label>
+                <label class="field"><span>零件码 *</span><div class="scan-control"><input name="part_code" id="issuePartInput" autocomplete="off" placeholder="生产订单+序列号 / 采购订单+行号+序列号" required><button class="field-scan-button" type="button" data-scan-kind="part" data-scan-input="#issuePartInput">▦ 扫码</button></div></label>
+                <button class="dark-button" type="submit">加入待发放清单</button>
+              </form>
+              <div class="code-guide"><b>支持码格式</b><span>2500…|0001</span><span>4500…|行号|0001</span><small>也支持无分隔紧凑码及 JSON 二维码</small></div>
+            </article>
+            <article class="batch-list-card">
+              <div class="panel-heading"><div><p class="eyebrow">STAGED ITEMS</p><h3>待发放零件</h3></div><span id="issueBatchCount" class="count-pill">0</span></div>
+              <div id="issueBatchList" class="batch-items empty-state">尚未扫描零件</div>
+              <footer><button class="secondary-button" type="button" data-clear-batch="issue">清空</button><button class="primary-button" type="button" id="confirmIssueBatch" disabled>确认发放 <span>0 件</span></button></footer>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-bind" data-title="现场绑定">
+        <div class="batch-workspace bind-workspace bind-console">
+          <header class="batch-hero bind-console-hero">
+            <div><p class="eyebrow">ASSEMBLY · ZERO OMISSION GATE</p><h2>清单逐项消减，<br><em>零遗漏后放行装配。</em></h2><p>先锁定装配订单，系统按清单数量展开全部质量追溯零件；同规格零件逐件绑定，每成功核验一件，待绑数量即时减一。</p><p class="quiet-label" id="bindSiteContext">正在确认现场站点…</p></div>
+            <div class="bind-phase"><span>01 建单</span><i></i><span>02 扫件</span><i></i><span>03 放行</span></div>
+          </header>
+
+          <article class="bind-order-gate">
+            <div class="gate-index">01</div>
+            <div class="gate-copy"><p class="eyebrow">LOCK ASSEMBLY ORDER</p><h3>输入或扫描装配订单号</h3><p>开始绑定后，本轮操作将锁定该订单，防止零件误绑到其他装配任务。</p></div>
+            <form id="bindOrderForm" class="bind-order-form">
+              <div class="scan-control"><input name="component_order_no" id="bindOrderInput" list="componentOrderOptions" autocomplete="off" placeholder="2000…" required><button class="field-scan-button" type="button" data-scan-kind="order" data-scan-input="#bindOrderInput">▦ 扫码</button></div>
+              <button class="signal-button" type="submit" id="startBindOrder">开始绑定</button>
+            </form>
+          </article>
+
+          <div id="bindSessionWorkspace" class="bind-session hidden">
+            <header class="bind-session-head">
+              <div><p class="eyebrow">ACTIVE ASSEMBLY ORDER</p><h3 id="activeBindOrder">—</h3><span id="activeBindMeta">正在读取追溯清单</span></div>
+              <div class="bind-progress">
+                <div><span id="bindProgressText">0 / 0</span><b>已核验</b></div>
+                <progress id="bindProgress" value="0" max="1"></progress>
+              </div>
+              <button class="secondary-button" type="button" data-clear-batch="bind">更换订单</button>
+            </header>
+
+            <div class="bind-operation-grid">
+              <article class="bind-scan-station">
+                <div class="station-number">02</div>
+                <p class="eyebrow">SCAN &amp; VERIFY</p>
+                <h3>连续扫码绑定零件</h3>
+                <p>摄像头和扫码枪均支持连续扫描；每识别一件即在后台自动保存，不关闭取景界面，也不需要逐件确认。标签损坏时可手工录入后回车。</p>
+                <form id="bindStageForm" class="bind-part-form">
+                  <label class="field"><span>零件码</span><div class="scan-control"><input name="part_code" id="bindPartInput" autocomplete="off" placeholder="2500订单|序列号 / 4500订单|行号|序列号" required><button class="field-scan-button" type="button" data-scan-kind="part" data-scan-input="#bindPartInput">▦ 扫码</button></div></label>
+                  <button class="sr-only" type="submit">提交当前零件</button>
+                </form>
+                <div class="scanner-ready" id="scannerReady"><i></i><span>扫码通道已就绪</span><kbd>ENTER</kbd><b id="lastScanFeedback">等待零件码</b></div>
+                <div class="verified-head"><span>本轮已核验</span><b id="bindBatchCount">0</b></div>
+                <div id="bindVerifiedList" class="verified-parts empty-state">尚未核验零件</div>
+              </article>
+
+              <article class="bind-requirement-board">
+                <div class="requirement-head">
+                  <div><p class="eyebrow">LIVE TRACE CHECKLIST</p><h3>仍需绑定的零件号与数量</h3></div>
+                  <span><b id="bindRemainingCount">0</b> 件待绑</span>
+                </div>
+                <div id="bindRequirementList" class="requirement-list empty-state">开始绑定后自动载入清单</div>
+              </article>
+            </div>
+
+            <footer class="bind-release-gate">
+              <div><span>03</span><p><b>扫码自动保存</b>每件零件识别成功后立即写入数据库；未扫完整也可以结束本轮，稍后继续。</p></div>
+              <button class="signal-button" type="button" id="confirmBindBatch" disabled>结束本轮扫码 <span>已保存 0 件</span></button>
+            </footer>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-exceptions" data-title="质量异常">
+        <div class="exception-layout">
+          <article class="danger-form">
+            <p class="eyebrow">STOP · ISOLATE · RECORD</p>
+            <h2>新建质量异常</h2>
+            <p>现场发现问题后，先暂停任务并隔离实物，再在此登记。</p>
+            <form id="exceptionForm" class="stack-form">
+              <label class="field"><span>异常零件物料 *</span><select name="material_code" id="exceptionMaterial" required></select></label>
+              <label class="field"><span>异常件四位顺序号 *</span><div class="scan-control"><input name="sequence_no" inputmode="numeric" pattern="[0-9]{1,4}" maxlength="4" placeholder="0001" required><button class="field-scan-button" type="button" data-scan-kind="sequence" data-scan-input="#exceptionForm [name='sequence_no']" data-scan-material="#exceptionMaterial">▦ 扫码</button></div></label>
+              <label class="field"><span>异常类型 *</span><select name="exception_type" required><option value="">请选择</option><option>来料质量</option><option>装配损伤</option><option>错料/不匹配</option><option>标签异常</option><option>系统数据异常</option></select></label>
+              <label class="field"><span>问题描述 *</span><textarea name="description" rows="4" required></textarea></label>
+              <label class="field"><span>责任处理人 *</span><input name="owner" required></label>
+              <button class="danger-button" type="submit">暂停并创建异常单</button>
+            </form>
+          </article>
+          <div class="exception-board">
+            <div class="panel-heading"><div><p class="eyebrow">OPEN CASES</p><h2>未关闭异常</h2></div><span id="openCaseCount" class="count-pill">0</span></div>
+            <div id="exceptionList" class="case-list empty-state">当前没有未关闭异常</div>
+            <details class="close-case-panel">
+              <summary>关闭异常 / 绑定替换件</summary>
+              <form id="closeExceptionForm" class="field-grid compact-form">
+                <label class="field"><span>异常单号 *</span><input name="case_no" required></label>
+                <label class="field"><span>处置结论 *</span><select name="disposition" required><option value="">请选择</option><option>更换零件</option><option>放行使用</option><option>退货</option><option>报废</option></select></label>
+                <label class="field"><span>替换件四位顺序号</span><div class="scan-control"><input name="replacement_sequence_no" inputmode="numeric" pattern="[0-9]{1,4}" maxlength="4" placeholder="0002"><button class="field-scan-button" type="button" data-scan-kind="sequence" data-scan-input="#closeExceptionForm [name='replacement_sequence_no']">▦ 扫码</button></div><small>物料与异常件相同；“更换零件”时必填</small></label>
+                <label class="field"><span>复核人 *</span><input name="operator" required></label>
+                <button class="dark-button field-wide" type="submit">确认处置并关闭</button>
+              </form>
+            </details>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-exchange" data-title="备份与迁移">
+        <div class="exchange-intro">
+          <div><p class="eyebrow">BACKUP &amp; MIGRATION</p><h2>在线实时共享，离线包只做兜底。</h2><p>三地日常业务已直接写入中心库；签名数据包保留用于历史数据迁移、灾备导出和网络中断后的受控补录。</p></div>
+          <div class="exchange-route" aria-label="联网共享示意"><span>新场 XC</span><i>→</i><b>中心质量库</b><i>←</i><span>锦晨 JC</span></div>
+        </div>
+        <article id="storagePanel" class="storage-panel hidden" data-level="NORMAL">
+          <header>
+            <div><p class="eyebrow">SERVER CAPACITY · AUTOMATIC FORECAST</p><h3>服务器容量与安全维护</h3><span id="storageSummary">正在测算服务器容量…</span></div>
+            <b id="storageLevel" class="storage-level">容量正常</b>
+          </header>
+          <div class="storage-meter" aria-label="服务器磁盘使用率">
+            <div><span>磁盘已用</span><strong id="storageUsedPercent">0%</strong></div>
+            <progress id="storageProgress" value="0" max="100"></progress>
+            <small>警戒线：提醒 70% · 警告 80% · 严重 90% · 始终预留 2 GiB</small>
+          </div>
+          <div class="storage-metrics">
+            <div><span>可用空间</span><b id="storageFree">—</b><small id="storageTotal">总容量 —</small></div>
+            <div><span>预计可运行</span><b id="storageRunway">—</b><small id="storageForecastBasis">正在建立增长基线</small></div>
+            <div><span>追溯数据库</span><b id="storageDatabase">—</b><small id="storagePlatform">平台文件 —</small></div>
+          </div>
+          <footer>
+            <div class="storage-maintenance-state">
+              <span id="storageBackupMeta">尚未下载完整备份</span>
+              <small id="storageCleanupMeta">下载完成后，24小时内允许执行安全缓存清理</small>
+            </div>
+            <div class="storage-actions">
+              <button class="secondary-button" type="button" id="refreshStorage">重新测算</button>
+              <button class="primary-button" type="button" id="downloadFullBackup">下载完整服务器数据</button>
+              <button class="danger-button" type="button" id="clearServerCache" disabled>清除安全缓存</button>
+            </div>
+          </footer>
+          <p class="storage-safety-note"><b>数据保护：</b>清理仅移除过期会话、已停用且从未绑定的旧清单行、180天前容量快照及超额历史备份/发布包；追溯主数据、现场绑定、解绑和操作审计记录不会删除。</p>
+        </article>
+        <div class="exchange-grid">
+          <article class="exchange-card export-card">
+            <span class="card-number">A</span><h3>导出本站操作增量</h3><p>只导出上次之后新增的收货、发放、绑定和异常事件，供总厂离线汇总。</p>
+            <a class="primary-button download-link" href="api/exchange/export?type=operations">下载操作数据包</a>
+          </article>
+          <article class="exchange-card master-card">
+            <span class="card-number">B</span><h3>导出基础数据</h3><p>总厂节点可导出部件、物料、订单和 WBS 清单，再交给新场或锦晨导入。</p>
+            <a class="secondary-button download-link" href="api/exchange/export?type=master_data">下载基础数据包</a>
+          </article>
+          <article class="exchange-card import-card">
+            <span class="card-number">C</span><h3>导入受控数据包</h3><p>系统先校验交换密钥、文件签名和数据包编号，再执行导入。</p>
+            <label class="file-drop" for="packageFile"><input id="packageFile" type="file" accept="application/json,.json"><span>选择 JSON 数据包</span><small>最大 10MB</small></label>
+            <button class="dark-button" type="button" id="importPackage" disabled>校验并导入</button>
+          </article>
+          <article class="exchange-card binding-export-card">
+            <span class="card-number">D</span><h3>导出已完成现场绑定</h3><p>导出关联链、操作人员、时间、扫码/手工方式、IP、操作系统和浏览器信息，并附两份主数据快照。</p>
+            <a class="primary-button download-link" href="api/export/completed-bindings.xlsx">下载绑定审计Excel</a>
+          </article>
+        </div>
+        <div id="exchangeWarning" class="warning-banner hidden"><b>正式使用前必须配置交换密钥</b><span>在三套节点上设置相同的 TRACE_EXCHANGE_KEY，防止数据包被替换或篡改。</span></div>
+        <article class="panel log-panel"><div class="panel-heading"><div><p class="eyebrow">TRANSFER LOG</p><h3>交换记录</h3></div><span id="unexportedCount" class="quiet-label">0 条待导出</span></div><div id="exchangeLogs" class="log-list empty-state">暂无交换记录</div></article>
+      </section>
+
+      <section class="view" id="view-master" data-title="追溯清单">
+        <div class="master-header">
+          <div><p class="eyebrow">SITE-SCOPED XLSX · CONTROLLED MASTER DATA</p><h2>新场、锦晨各自维护两份清单。</h2></div>
+          <div class="master-context">
+            <p>部件追溯清单定义“装配订单要扫什么”，SRM清单按订单号和行号识别零件号；现场扫码序列号作为最终绑定结果。</p>
+            <label id="masterSiteSwitcherWrap" class="master-site-switcher"><span>当前维护站点</span><select id="masterSiteSwitcher"></select></label>
+          </div>
+        </div>
+        <div class="dual-import-grid">
+          <article class="excel-import-panel">
+            <div class="excel-mark" aria-hidden="true">A</div>
+            <div><p class="eyebrow">COMPONENT TRACE · <span data-master-site-name>本站</span></p><h3>部件追溯清单</h3><p>WBS、部件订单、功能部件、工序、零件编码和零件数量；旧清单缺少数量列时兼容按 1 件导入。</p></div>
+            <label class="file-drop excel-file" for="componentTraceFile"><input id="componentTraceFile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"><span>选择 部件追溯清单.xlsx</span><small>最大15MB</small></label>
+            <button class="primary-button" type="button" id="importComponentTrace" disabled>校验并更新需求清单</button>
+          </article>
+          <article class="excel-import-panel srm-import-panel">
+            <div class="excel-mark" aria-hidden="true">B</div>
+            <div><p class="eyebrow">SRM PART LIST · <span data-master-site-name>本站</span></p><h3>SRM零件清单</h3><p>零件编码、2500/4500订单和采购行号；序列号允许为空。</p></div>
+            <label class="file-drop excel-file" for="srmPartsFile"><input id="srmPartsFile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"><span>选择 SRM零件清单.xlsx</span><small>最大15MB</small></label>
+            <button class="dark-button" type="button" id="importSrmParts" disabled>校验并更新SRM清单</button>
+          </article>
+        </div>
+        <div class="master-grid">
+          <article class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">COMPONENT ORDERS</p><h3>部件订单与WBS</h3></div><span id="componentOrderCount" class="count-pill">0</span></div>
+            <div class="master-toolbar"><label><span>搜索清单</span><input id="masterOrderSearch" autocomplete="off" placeholder="工单 / WBS / 功能部件"></label><button class="secondary-button" type="button" id="clearMasterSearch">清除</button></div>
+            <div id="orderList" class="master-list empty-state">暂无部件订单</div>
+            <div id="masterPagination" class="master-pagination hidden"></div>
+          </article>
+          <article class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">IMPORT AUDIT</p><h3>当前清单状态</h3></div><span id="catalogWarningCount" class="count-pill">0</span></div>
+            <label class="warning-only-toggle"><input id="catalogWarningsOnly" type="checkbox"><span>只看有警告的导入记录</span></label>
+            <div id="catalogAudit" class="catalog-audit empty-state">尚无导入记录</div>
+          </article>
+        </div>
+      </section>
+
+      <section class="view" id="view-access" data-title="账号与权限">
+        <div class="access-hero">
+          <div>
+            <p class="eyebrow">UNIFIED IDENTITY · AUTOMATIC SYNC</p>
+            <h2>一个账号源，<br><em>同步到质量追溯。</em></h2>
+            <p>质检平台统一管理账号、密码、姓名、站点和业务角色；本页只展示同步结果，避免两套系统重复维护。</p>
+          </div>
+          <div class="access-signal" aria-label="权限原则">
+            <span>01</span><b>质检平台创建</b><i></i><span>02</span><b>自动同步</b><i></i><span>03</span><b>追溯生效</b>
+          </div>
+        </div>
+
+        <div class="permission-matrix">
+          <article data-role-card="WAREHOUSE_OPERATOR"><span>WAREHOUSE · PAUSED</span><h3>仓库操作员</h3><p>仓库发放阶段已停用，历史账号与记录继续保留。</p><b>仅查询</b></article>
+          <article data-role-card="ASSEMBLY_OPERATOR"><span>ASSEMBLY</span><h3>现场装配操作员</h3><p>查询零件链，扫码完成现场绑定。</p><b>现场绑定</b></article>
+          <article data-role-card="VIEWER"><span>READ ONLY</span><h3>只读查询</h3><p>查看总览和追溯结果，不可写入业务数据。</p><b>仅查询</b></article>
+          <article data-role-card="ADMIN"><span>CONTROL</span><h3>系统管理员</h3><p>账号、清单、迁移与全部业务权限。</p><b>全部权限</b></article>
+        </div>
+
+        <article class="panel identity-source-card" id="accountAdmin">
+          <div><p class="eyebrow">ACCOUNT SOURCE OF TRUTH</p><h3>账号统一在质检平台维护</h3><p>创建账号、重置密码、修改姓名、启停账号、站点和角色，都请返回质检平台的“用户与权限”。保存后会立即同步，并注销被调整账号的追溯旧会话。</p></div>
+          <a class="primary-button" href="/">返回质检平台管理账号 <span aria-hidden="true">→</span></a>
+        </article>
+
+        <article class="panel account-directory">
+          <div class="panel-heading"><div><p class="eyebrow">SYNC DIRECTORY · READ ONLY</p><h3>已同步账号</h3></div><div class="account-summary" id="accountSummary">正在加载…</div></div>
+          <p class="directory-hint">以下信息来自质检平台，仅用于核对追溯权限是否正确生效。</p>
+          <div id="userList" class="user-list empty-state">尚未加载账号</div>
+        </article>
+      </section>
+
+      <section class="view" id="view-admin-data" data-title="业务数据管理" aria-labelledby="adminDataTitle">
+        <header class="admin-data-hero">
+          <div>
+            <p class="eyebrow">HQ CONTROL · BUSINESS DATA WORKBENCH</p>
+            <h2 id="adminDataTitle" tabindex="-1">全站业务数据，<br><em>受控修改、逐笔留痕。</em></h2>
+            <p>仅总厂管理员可进入。所有新增、修改与删除都会校验当前版本，并要求填写变更原因。</p>
+          </div>
+          <ol class="admin-data-seal" aria-label="受控操作原则">
+            <li><span>01</span><b>选择业务实体</b></li>
+            <li><span>02</span><b>审查字段差异</b></li>
+            <li><span>03</span><b>确认并写入审计</b></li>
+          </ol>
+        </header>
+
+        <div class="admin-control-strip">
+          <div><span class="admin-control-mark" aria-hidden="true">!</span><p><b>数据库受控操作区</b><small id="adminCatalogMeta">正在读取可管理业务实体…</small></p></div>
+          <button class="secondary-button" type="button" id="refreshAdminCatalog">刷新目录</button>
+        </div>
+
+        <div class="admin-data-layout">
+          <aside class="admin-entity-panel" aria-labelledby="adminEntityHeading">
+            <header><div><p class="eyebrow">DATA DIRECTORY</p><h3 id="adminEntityHeading">业务实体目录</h3></div><span id="adminEntityCount">0</span></header>
+            <label class="admin-directory-search"><span class="sr-only">筛选业务实体</span><input id="adminEntitySearch" type="search" autocomplete="off" placeholder="搜索目录"></label>
+            <nav id="adminEntityDirectory" class="admin-entity-directory" aria-label="业务实体目录">
+              <div class="admin-directory-empty">正在加载目录…</div>
+            </nav>
+          </aside>
+
+          <section class="admin-records-panel" id="adminRecordsPanel" aria-labelledby="adminTableTitle" aria-busy="false">
+            <header class="admin-records-heading">
+              <div><p class="eyebrow" id="adminTableGroup">BUSINESS ENTITY</p><h3 id="adminTableTitle" tabindex="-1">请选择业务实体</h3><p id="adminTableDescription">从左侧目录选择需要查看或维护的数据。</p></div>
+              <div><span id="adminRecordCount">0 条记录</span><button class="primary-button hidden" type="button" id="createAdminRecord">新增记录</button></div>
+            </header>
+
+            <div class="admin-data-toolbar" role="search" aria-label="业务数据筛选">
+              <label class="admin-query-field"><span>搜索当前实体</span><input id="adminRecordSearch" type="search" autocomplete="off" placeholder="输入关键字"></label>
+              <label id="adminSiteFilterWrap"><span>站点范围</span><select id="adminSiteFilter"><option value="">全部站点</option><option value="HQ">总厂 HQ</option><option value="XC">新场 XC</option><option value="JC">锦晨 JC</option></select></label>
+              <label><span>每页显示</span><select id="adminPageSize"><option value="20">20 条</option><option value="50">50 条</option><option value="100">100 条</option></select></label>
+              <button class="secondary-button" type="button" id="refreshAdminRecords">刷新数据</button>
+            </div>
+
+            <div id="adminDataState" class="admin-data-state" role="status" aria-live="polite">
+              <span aria-hidden="true">⌁</span><b>等待选择</b><small>选择业务实体后加载中心数据库记录。</small>
+            </div>
+
+            <div id="adminDataTableWrap" class="admin-data-table-wrap hidden">
+              <table class="admin-data-table" id="adminDataTable">
+                <caption id="adminDataCaption">业务数据记录</caption>
+                <thead id="adminDataTableHead"></thead>
+                <tbody id="adminDataTableBody"></tbody>
+              </table>
+            </div>
+
+            <nav id="adminPagination" class="admin-pagination hidden" aria-label="业务数据分页">
+              <button type="button" id="adminPreviousPage">上一页</button>
+              <span id="adminPageMeta">第 1 / 1 页</span>
+              <button type="button" id="adminNextPage">下一页</button>
+            </nav>
+          </section>
+        </div>
+
+        <section class="admin-audit-panel" aria-labelledby="adminAuditTitle">
+          <header><div><p class="eyebrow">RECENT CONTROLLED CHANGES</p><h3 id="adminAuditTitle">最近管理员变更</h3></div><span>只读审计</span></header>
+          <div id="adminAuditList" class="admin-audit-list"><div class="admin-directory-empty">暂无变更记录</div></div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="adminRecordDialog" class="admin-record-dialog" aria-labelledby="adminRecordTitle" aria-describedby="adminRecordDescription">
+    <form id="adminRecordForm" class="admin-record-shell">
+      <header>
+        <div><p class="eyebrow" id="adminRecordEyebrow">CONTROLLED RECORD</p><h2 id="adminRecordTitle">编辑业务记录</h2><span id="adminRecordDescription">修改字段后进入差异审查。</span></div>
+        <button type="button" id="closeAdminRecord" aria-label="关闭记录编辑">×</button>
+      </header>
+      <div id="adminRecordFields" class="admin-record-fields"></div>
+      <footer><span><i></i> 尚未写入数据库</span><div><button class="secondary-button" type="button" id="cancelAdminRecord">取消</button><button class="primary-button" type="submit" id="reviewAdminRecord">审查变更</button></div></footer>
+    </form>
+  </dialog>
+
+  <dialog id="adminReviewDialog" class="admin-review-dialog" aria-labelledby="adminReviewTitle" aria-describedby="adminReviewDescription">
+    <form id="adminReviewForm" class="admin-review-shell">
+      <header><span id="adminReviewMark" aria-hidden="true">Δ</span><div><p class="eyebrow" id="adminReviewEyebrow">CHANGE REVIEW</p><h2 id="adminReviewTitle">确认字段差异</h2><p id="adminReviewDescription">请核对本次修改，并填写可追溯的变更原因。</p></div></header>
+      <div class="admin-review-body">
+        <div id="adminReviewSummary" class="admin-review-summary"></div>
+        <div id="adminReviewDiff" class="admin-diff-list" role="list"></div>
+        <label id="adminDeleteConfirmWrap" class="admin-delete-confirm hidden"><span>输入记录标识以确认删除 *</span><input id="adminDeleteConfirm" autocomplete="off"><small id="adminDeleteConfirmHint"></small></label>
+        <label class="admin-reason-field"><span>变更原因 * <b id="adminReasonCount">0 / 200</b></span><textarea id="adminChangeReason" minlength="4" maxlength="200" rows="4" required placeholder="说明修改依据、工单号或问题背景（4–200字）"></textarea></label>
+        <div id="adminReviewError" class="admin-review-error hidden" role="alert" tabindex="-1"></div>
+      </div>
+      <footer><button class="secondary-button" type="button" id="cancelAdminReview">返回修改</button><button class="danger-button" type="submit" id="confirmAdminChange">确认并写入</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="statusDetailDialog" class="status-detail-dialog" aria-labelledby="statusDetailTitle">
+    <div class="status-detail-shell">
+      <header>
+        <div><p class="eyebrow" id="statusDetailEyebrow">STATUS INVENTORY</p><h2 id="statusDetailTitle">零件状态明细</h2><span id="statusDetailMeta">0 件</span></div>
+        <button type="button" id="closeStatusDetail" aria-label="关闭明细">×</button>
+      </header>
+      <div class="status-detail-filter">
+        <label><span>搜索当前明细</span><input id="statusDetailSearch" autocomplete="off" placeholder="装配订单 / 功能部件 / WBS"></label>
+        <b id="statusDetailCount">0</b>
+      </div>
+      <div id="unbindSelectionBar" class="unbind-selection-bar hidden" aria-live="polite">
+        <label><input id="selectVisibleBindings" type="checkbox"><span>全选当前结果</span></label>
+        <p>已选 <b id="selectedUnbindCount">0</b> 件</p>
+        <button class="secondary-button" type="button" id="clearUnbindSelection">清除选择</button>
+        <button class="danger-button" type="button" id="batchUnbindSelected">批量解除绑定</button>
+      </div>
+      <div id="statusDetailList" class="status-detail-list empty-state">暂无明细</div>
+      <footer><span><i></i> 数据按当前右上角站点视图实时筛选</span><button class="secondary-button" type="button" id="closeStatusDetailFooter">关闭</button></footer>
+    </div>
+  </dialog>
+
+  <dialog id="bindDecisionDialog" class="bind-decision-dialog">
+    <form method="dialog">
+      <span class="decision-mark" id="bindDecisionMark">!</span>
+      <p class="eyebrow" id="bindDecisionEyebrow">BINDING CHECK</p>
+      <h2 id="bindDecisionTitle">请确认</h2>
+      <p id="bindDecisionMessage"></p>
+      <div class="decision-actions">
+        <button class="secondary-button" value="cancel" id="cancelBindDecision">取消</button>
+        <button class="signal-button" value="confirm" id="confirmBindDecision">确认绑定</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="scannerDialog" class="scanner-dialog" aria-labelledby="scannerTitle">
+    <div class="scanner-shell">
+      <header><div><p>SECURE CAMERA SCANNER</p><h2 id="scannerTitle">扫描二维码</h2></div><button type="button" id="closeScanner" aria-label="关闭扫码">×</button></header>
+      <div class="scanner-stage">
+        <video id="scannerVideo" playsinline muted></video>
+        <canvas id="scannerCanvas" hidden></canvas>
+        <div class="scanner-reticle" aria-hidden="true"><i></i><i></i><i></i><i></i><span></span></div>
+        <div id="scannerIdle" class="scanner-idle"><b>▦</b><span>将二维码放入取景框</span></div>
+      </div>
+      <div class="scanner-feedback"><span id="scannerPulse"></span><p id="scannerStatus">请选择实时扫码或拍照识码</p></div>
+      <div class="scanner-actions">
+        <button class="signal-button" type="button" id="startLiveScanner">打开实时摄像头</button>
+        <label class="secondary-button photo-scan-button" for="scanPhotoInput">拍照识码<input id="scanPhotoInput" type="file" accept="image/*" capture="environment"></label>
+        <button class="secondary-button hidden" type="button" id="toggleTorch">打开闪光灯</button>
+      </div>
+      <p class="scanner-hint" id="scannerHint">实时扫码会保持取景界面；每件零件识别后在后台自动保存，成功或失败都会继续等待下一个码。</p>
+      <details><summary>支持的二维码内容格式</summary><p>生产件：<code>25000372978|0082</code>；采购件：<code>4500506806|5960|0034</code>；也支持紧凑数字码或包含订单号、行号、序列号的 JSON。部件订单直接使用 <code>2000…</code> 编码。</p></details>
+    </div>
+  </dialog>
+
+  <dialog id="passwordDialog" class="password-dialog">
+    <form id="passwordForm" method="dialog">
+      <p class="eyebrow">ACCOUNT SECURITY</p><h2>首次登录，请修改密码</h2><p>新密码至少10位。修改完成前请勿进行生产操作。</p>
+      <label class="sr-only">用户名<input id="passwordUsername" name="username" autocomplete="username" tabindex="-1"></label>
+      <label class="field"><span>当前密码 *</span><input name="current_password" type="password" autocomplete="current-password" required></label>
+      <label class="field"><span>新密码 *</span><input name="new_password" type="password" minlength="10" autocomplete="new-password" required></label>
+      <button class="primary-button" type="submit">保存新密码</button>
+    </form>
+  </dialog>
+
+  <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+  <script src="vendor/jsQR.js?v=1" defer></script>
+  <script src="scan-utils.js?v=3" defer></script>
+  <script src="app.js?v=41" defer></script>
+</body>
+</html>

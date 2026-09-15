@@ -6,6 +6,7 @@ summaries while avoiding a Python pass over hundreds of thousands of rows on
 every chart request.
 """
 import collections
+from bisect import bisect_left, bisect_right
 import json
 import math
 
@@ -15,8 +16,7 @@ from .rules import distance
 
 METRICS = ['speed','heading','pitch','roll','gx','gy','gz','ax','ay','az','ve','vn','vu','alt',
            'lat_std','lon_std','alt_std','heading_std','roll_std','pitch_std','age','sat1','sat2',
-           've_std','vn_std','vu_std','course','course_std',
-           'speed_reference','speed_reference_low','speed_reference_high']
+           've_std','vn_std','vu_std','course','course_std']
 ROLLUP_SECONDS = 60
 ROLLUP_LEVELS = (60,600)
 # Bump when the payload shape or motion-state semantics change; deployment
@@ -165,8 +165,9 @@ class RollupBuilder:
         self.fixed += int(p['fix_mode'] in (4,8))
         self.valid += int(bool(p['valid_pos']))
         self.fix_counts[str(p['fix_mode'])] += 1
-        # Confirmed stationary samples contribute zero even without a valid
-        # position. Moving speeds still require a valid navigation solution.
+        # The maximum follows the same projected GPCHCX.speed channel as the
+        # curve.  Position readiness is not a speed gate; only the explicit
+        # drift quarantine has already removed a bad point from this value.
         if p['speed'] is not None:
             self.max_speed = max(self.max_speed or 0,p['speed']*3.6)
         for metric in METRICS:
@@ -319,19 +320,25 @@ class QueryCombiner:
                 self.segments.append(part)
 
     @staticmethod
-    def _stationary_anchor(segment, track):
+    def _stationary_anchor(segment, track, moving_points=None, moving_times=None):
         """Choose one static coordinate using neighboring motion and confidence."""
         candidates = segment.get(STATIONARY_POSITION_CANDIDATES) or []
         if not candidates and segment.get(STATIONARY_POSITION_CANDIDATE):
             candidates = [segment[STATIONARY_POSITION_CANDIDATE]]
         if not candidates:
             return None
-        before = next((p for p in reversed(track)
-                       if p['t'] < segment['start'] and p.get('motion_state') == 'moving' and
-                       isinstance(p.get('lat'), (int, float)) and isinstance(p.get('lon'), (int, float))), None)
-        after = next((p for p in track
-                      if p['t'] > segment['end'] and p.get('motion_state') == 'moving' and
-                      isinstance(p.get('lat'), (int, float)) and isinstance(p.get('lon'), (int, float))), None)
+        if moving_points is None or moving_times is None:
+            # Keep the two-argument form available for callers that use this
+            # helper directly; the query path supplies an indexed moving view.
+            moving_points = [p for p in track
+                             if p.get('motion_state') == 'moving' and
+                             isinstance(p.get('lat'), (int, float)) and
+                             isinstance(p.get('lon'), (int, float))]
+            moving_times = [p['t'] for p in moving_points]
+        before_index = bisect_left(moving_times, segment['start']) - 1
+        after_index = bisect_right(moving_times, segment['end'])
+        before = moving_points[before_index] if before_index >= 0 else None
+        after = moving_points[after_index] if after_index < len(moving_points) else None
         # A stop should connect to the position occupied at both sides.  Use
         # their midpoint when both are available; this avoids following static
         # GNSS wander while retaining the selected in-segment fix.
@@ -358,6 +365,14 @@ class QueryCombiner:
     @classmethod
     def _anchor_stationary_track(cls, track, segments):
         anchored = [dict(point) for point in track]
+        # Segments are ordered and disjoint.  Indexing the moving neighbors
+        # once avoids scanning the complete track for every stationary group.
+        moving_points = [point for point in anchored
+                         if point.get('motion_state') == 'moving' and
+                         isinstance(point.get('lat'), (int, float)) and
+                         isinstance(point.get('lon'), (int, float))]
+        moving_times = [point['t'] for point in moving_points]
+        track_times = [point['t'] for point in anchored]
         index = 0
         while index < len(segments):
             segment = segments[index]
@@ -392,12 +407,14 @@ class QueryCombiner:
                 combined[STATIONARY_POSITION_CANDIDATES] = _bounded_position_candidates(candidates)
             if preferred:
                 combined[STATIONARY_POSITION_CANDIDATE] = preferred
-            anchor = cls._stationary_anchor(combined, anchored)
+            anchor = cls._stationary_anchor(combined, anchored, moving_points, moving_times)
             if not anchor:
                 index = next_index
                 continue
-            for point in anchored:
-                if combined['start'] <= point['t'] <= combined['end'] and point.get('motion_state') == 'stationary':
+            left = bisect_left(track_times, combined['start'])
+            right = bisect_right(track_times, combined['end'])
+            for point in anchored[left:right]:
+                if point.get('motion_state') == 'stationary':
                     point['lat'], point['lon'] = anchor['lat'], anchor['lon']
                     point['position_source'] = 'stationary_anchor'
             index = next_index
@@ -574,16 +591,13 @@ class QueryCombiner:
                          track_points=len(track),
                          speed_samples=sum(g['values']['speed'][3] for g in self.groups.values()),
                          speed_coverage_pct=100*sum(g['values']['speed'][3] for g in self.groups.values())/self.count if self.count else 0,
-                         reference_speed_samples=sum(g['values']['speed_reference'][3] for g in self.groups.values()),
-                         reference_speed_coverage_pct=100*sum(g['values']['speed_reference'][3] for g in self.groups.values())/self.count if self.count else 0,
-                         display_speed_coverage_pct=100*sum(g['values']['speed'][3]+g['values']['speed_reference'][3] for g in self.groups.values())/self.count if self.count else 0,
                          fix_counts=dict(self.fix_counts),sample_hz=(self.count-1)/span if span else 0),
                     aggregation=dict(buckets=len(self.groups),bucket_s=(self.end-self.start)/self.bins,
                                      source=source,source_resolution_s=source_resolution_s,query_ms=round(elapsed_ms,1),cache_hit=False,
                                      track_points=len(track),track_limit=TRACK_LIMIT,track_truncated=self.track_truncated or len(self.track)>TRACK_LIMIT,
                     method=quality.policy_description()+' 长窗口分层读取可重建的 60 秒或 10 分钟聚合，首尾读取原始采样。',
                                      timezone='Asia/Shanghai',coordinates='WGS84 原始坐标；前端高德底图单独转换为 GCJ-02 展示',
-                                     mileage='可信运动且定位连续时的地速梯形积分；缺测不外推，不是轮速/CAN 里程'))
+                                     mileage='两端均为振动判定运动、定位连续时，对 GPCHCX.speed 做梯形积分；缺测不外推，不是轮速/CAN 里程'))
 
 
 def encode(snapshot):

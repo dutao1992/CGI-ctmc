@@ -7,7 +7,10 @@ import threading
 import time
 
 from .protocol import FRAME, NUMERIC, parse, checksum, describe
-from .rules import DEFAULTS, LABELS, conditions
+from .rules import (DEFAULTS, LABELS, THRESHOLD_EVENT_FIELDS,
+                    THRESHOLD_EVENT_GROUPS, THRESHOLD_EVENT_KINDS,
+                    THRESHOLD_EVENT_META,
+                    threshold_conditions)
 from .maintenance import file_lock, disk_usage
 from . import quality
 from .aggregate import (METRICS, ROLLUP_LEVELS, ROLLUP_SECONDS, ROLLUP_VERSION, QueryCombiner,
@@ -22,6 +25,21 @@ def _sum_existing_sizes(paths):
         try: total += path.stat().st_size
         except FileNotFoundError: pass  # SQLite may remove transient -shm after globbing.
     return total
+
+
+def _threshold_event_item(row):
+    meta = THRESHOLD_EVENT_META.get(row['kind'], {})
+    peak = float(row['peak'])
+    threshold = float(row['threshold'])
+    excess = max(0.0, peak-threshold)
+    excess_pct = excess/threshold*100 if threshold > 0 else None
+    group_key = next((key for key, kinds in THRESHOLD_EVENT_GROUPS.items()
+                      if row['kind'] in kinds), 'other')
+    return dict(row, label=LABELS.get(row['kind'],row['kind']),
+                event_category='threshold', event_group=meta.get('group'),
+                event_group_key=group_key, unit=meta.get('unit'),
+                value_precision=meta.get('precision'), excess=round(excess, 5),
+                excess_pct=round(excess_pct, 3) if excess_pct is not None else None)
 
 SCHEMA = '''
 PRAGMA journal_mode=WAL;
@@ -39,6 +57,7 @@ CREATE TABLE IF NOT EXISTS events (
  status TEXT NOT NULL DEFAULT 'open', note TEXT NOT NULL DEFAULT '', actor TEXT NOT NULL DEFAULT '',
  updated REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS event_range ON events(device_id,start,end);
+CREATE INDEX IF NOT EXISTS event_kind_range ON events(device_id,kind,start,end);
 CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY, t REAL, actor TEXT, action TEXT, target TEXT, detail TEXT);
 CREATE INDEX IF NOT EXISTS audit_action_target ON audit(action,target);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -52,8 +71,8 @@ CREATE TABLE IF NOT EXISTS point_rollups (
  PRIMARY KEY(device_id,bucket_s,bucket_start)) WITHOUT ROWID;
 '''
 
-VIBRATION_RAW_SCAN_MAX_S = 6 * 3600
-VIBRATION_ROLLUP_CANDIDATES = 24
+VIBRATION_RAW_SCAN_MAX_S = 1800
+VIBRATION_ROLLUP_CANDIDATES = 6
 
 
 class Connection(sqlite3.Connection):
@@ -250,8 +269,11 @@ class Store:
             row = connection.execute('''SELECT COUNT(*),COALESCE(SUM(point_count),0),
                     COALESCE(SUM(version!=?),0) FROM point_rollups WHERE bucket_s=?'''+where,
                     (ROLLUP_VERSION,seconds,*params)).fetchone()
+            # Allow live edge delay of up to one active minute (600 points at 10 Hz)
+            # because the query tail reads unrolled live points directly.
+            level_ready = (row[2] == 0 and (row[1] == raw or (raw - row[1] <= 600 and device_id is not None)))
             levels.append(dict(resolution_s=seconds,buckets=row[0],points=row[1],invalid_buckets=row[2],
-                               ready=row[1]==raw and row[2]==0))
+                               ready=level_ready))
         return dict(version=ROLLUP_VERSION,raw_points=raw,ready=all(level['ready'] for level in levels),levels=levels)
 
     @staticmethod
@@ -268,6 +290,15 @@ class Store:
         if builder:
             yield builder.snapshot()
 
+    def data_revision(self, connection, device):
+        # A stable revision covers late arrivals, rule edits and quality rebuilds.
+        # No point-table scan or per-poll write is required.
+        if device is None:
+            return None
+        return json.dumps([self._cache_epoch(connection), quality.VERSION, ROLLUP_VERSION,
+                           device['point_count'], device['last_t'], device['rules']],
+                          separators=(',', ':'))
+
     def devices(self):
         with self.connect() as c:
             rows = c.execute('SELECT * FROM devices ORDER BY last_t DESC').fetchall()
@@ -277,6 +308,7 @@ class Store:
                 latest = c.execute(quality.JOIN+' WHERE p.device_id=? ORDER BY p.t DESC LIMIT 1',(d['id'],)).fetchone()
                 # Retained device metadata may outlive all its samples. Fail closed.
                 d['latest'] = describe(quality.project(latest or json.loads(d['latest']), info=True))
+                d['data_revision'] = self.data_revision(c, row)
                 d['rules'] = json.loads(d['rules'])
                 d['online'] = 0 <= time.time() - d['last_received'] < 30 and abs(time.time()-d['last_t']) < 60
                 out.append(d)
@@ -362,21 +394,42 @@ class Store:
         return {'ok':True}
 
     def events(self, sn, start, end):
-        # Historical measurement events are operational only if their peak is
-        # still valid under the current filter. Status/transport diagnostics stay.
-        event_fields = {'overspeed':['speed'],'acceleration':['speed'],'braking':['speed'],
-                        'roll':['roll'],'pitch':['pitch'],'shock':['ax','ay','az'],'position_jump':['lat','lon']}
+        # Only threshold events are operational.  Each event is still gated by
+        # the quality projection of the sample that produced its peak, so a
+        # stale/manual row or a quality anomaly cannot surface here.
+        event_fields = THRESHOLD_EVENT_FIELDS
+        kind_placeholders = ','.join('?' for _ in THRESHOLD_EVENT_KINDS)
         cases = ' '.join("WHEN '"+kind+"' THEN "+str(sum(quality.BITS[k] for k in fields)) for kind,fields in event_fields.items())
-        gate = f''' AND (e.kind NOT IN ({','.join('?' for _ in event_fields)}) OR EXISTS (
+        gate = f''' AND e.kind IN ({kind_placeholders}) AND EXISTS (
             SELECT 1 FROM point_quality q WHERE q.device_id=e.device_id AND q.t=e.point_t
             AND q.version={quality.VERSION} AND q.context_id IS NULL
-            AND (q.mask & CASE e.kind {cases} ELSE 0 END)=0))'''
-        params = (sn,end,start,*event_fields)
+            AND (q.mask & CASE e.kind {cases} ELSE 0 END)=0)'''
+        params = (sn,end,start,*THRESHOLD_EVENT_KINDS)
         with self.connect() as c:
             base = ' FROM events e WHERE e.device_id=? AND e.start<=? AND e.end>=?'+gate
             count = c.execute('SELECT COUNT(*)'+base, params).fetchone()[0]
             rows = c.execute('SELECT e.*'+base+' ORDER BY e.start DESC LIMIT 2000',params).fetchall()
-        return dict(total=count, items=[dict(r, label=LABELS.get(r['kind'],r['kind'])) for r in rows], truncated=count>2000)
+            grouped = c.execute('SELECT e.kind,COUNT(*) n'+base+' GROUP BY e.kind',params).fetchall()
+            top_events = {}
+            for group, kinds in THRESHOLD_EVENT_GROUPS.items():
+                group_placeholders = ','.join('?' for _ in kinds)
+                top_rows = c.execute(
+                    'SELECT e.*'+base+
+                    f' AND e.kind IN ({group_placeholders}) '
+                    'ORDER BY (e.peak-e.threshold) DESC,e.peak DESC,e.start DESC LIMIT 10',
+                    (*params,*kinds)).fetchall()
+                top_events[group] = [_threshold_event_item(row) for row in top_rows]
+        items = [_threshold_event_item(row) for row in rows]
+        group_counts = {group:0 for group in THRESHOLD_EVENT_GROUPS}
+        for row in grouped:
+            group = next((key for key, kinds in THRESHOLD_EVENT_GROUPS.items()
+                          if row['kind'] in kinds), None)
+            if group:
+                group_counts[group] += row['n']
+        return dict(total=count, items=items, truncated=count>2000,
+                    group_counts=group_counts, top_events=top_events,
+                    threshold_kinds=list(THRESHOLD_EVENT_KINDS),
+                    interpretation='仅展示数据质量通过且参数值超过当前规则阈值的自动事件；数据质量异常请查看数据质量页')
 
     def quality_summary(self, sn, start, end, connection=None):
         if connection is None:
@@ -532,11 +585,23 @@ class Store:
         candidate_starts = Store._vibration_rollup_candidates(connection, sn, start, end)
         if not candidate_starts:
             return vibration_unavailable('筛选时段没有可用于诊断的 60 秒振动聚合候选')
-        samples = []
+        # Adjacent ranked buckets commonly overlap by almost a full minute.
+        # Coalesce those windows before projecting rows so a long query does
+        # not run the quality join and protocol preference repeatedly for the
+        # same timestamps.  The merged ranges cover exactly the union of the
+        # former windows; analyze_vibration still performs the final
+        # timestamp de-duplication and gap checks.
+        windows = []
         for bucket in candidate_starts:
-            samples.extend(Store._vibration_rows(
-                connection, sn, max(start, bucket - MAX_GAP_S), min(end, bucket + MAX_WINDOW_S + MAX_GAP_S)
-            ))
+            left = max(start, bucket - MAX_GAP_S)
+            right = min(end, bucket + MAX_WINDOW_S + MAX_GAP_S)
+            if windows and left <= windows[-1][1]:
+                windows[-1][1] = max(windows[-1][1], right)
+            else:
+                windows.append([left, right])
+        samples = []
+        for left, right in windows:
+            samples.extend(Store._vibration_rows(connection, sn, left, right))
         result = analyze_vibration(samples)
         if result.get('available'):
             result.setdefault('selection', {})['rollup_candidates'] = len(candidate_starts)
@@ -548,21 +613,22 @@ class Store:
         bins = max(50,min(1500,int(bins)))
         started = time.perf_counter()
         with self.connect() as c:
-            epoch = self._cache_epoch(c)
-            cache_key = (epoch,sn,start,end,bins)
+            c.execute('BEGIN')
+            device_row = c.execute('SELECT * FROM devices WHERE id=?',(sn,)).fetchone()
+            revision = self.data_revision(c, device_row)
+            cache_key = (revision,sn,start,end,bins)
             cached = self._cache_get(cache_key)
             if cached is not None:
                 cached['aggregation']['computed_query_ms'] = cached['aggregation'].get('query_ms')
                 cached['aggregation']['query_ms'] = round((time.perf_counter()-started)*1000,1)
                 return cached
-            device_row = c.execute('SELECT last_t FROM devices WHERE id=?',(sn,)).fetchone()
-            device_latest = device_row[0] if device_row else None
+            device_latest = device_row['last_t'] if device_row else None
             contexts = quality.contexts(c,sn)
             combiner = QueryCombiner(sn,start,end,bins)
             source = 'raw'
             resolution = 0
             span = end-start
-            resolution = 600 if span >= 2*86400 else ROLLUP_SECONDS if span >= 6*3600 else 0
+            resolution = 600 if span >= 2*86400 else ROLLUP_SECONDS if span >= 1800 else 0
             count = None
             if resolution:
                 status = self._rollup_status(c,sn)
@@ -601,6 +667,7 @@ class Store:
         result = combiner.finish(contexts,source,resolution,(time.perf_counter()-started)*1000)
         vibration['range'] = result.pop('vibration_range')
         result['vibration'] = vibration
+        result['data_revision'] = revision
         result['events'] = self.events(sn,start,end)
         result['aggregation']['query_ms'] = round((time.perf_counter()-started)*1000,1)
         ttl = 10 if device_latest is not None and end >= device_latest-120 else 60
@@ -674,13 +741,15 @@ class Ingestor:
             # Recover persisted episode identity after restart, never replay side effects.
             for e in c.execute('SELECT * FROM events WHERE device_id=? AND end>=? AND end<=? AND rule_version=?',
                                (sn,p['t']-rules['gap_s'],p['t'],rules['version'])):
+                if e['kind'] not in THRESHOLD_EVENT_KINDS:
+                    continue
                 self.states[sn]['active'][e['kind']] = {'id':e['id'],'start':e['start'],'last':e['end'],'peak':e['peak'],'samples':e['samples'],'point_t':e['point_t']}
         state = self.states[sn]
         history = state['history']
         while history and history[0]['t'] < p['t']-1.5:
             history.popleft()
         baseline = next((x for x in history if p['t']-x['t']>=.8),None)
-        signals = conditions(p,state['prev'],baseline,rules,bool(device_row['mount_confirmed']))
+        signals = threshold_conditions(p,state['prev'],baseline,rules,bool(device_row['mount_confirmed']))
         for kind in list(state['active']):
             if kind not in signals:
                 del state['active'][kind]

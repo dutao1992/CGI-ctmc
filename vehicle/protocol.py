@@ -19,6 +19,19 @@ NUMERIC = BASE + ['age'] + EXT + TAIL
 NAV = {0:'初始化',1:'卫导模式',2:'组合导航',3:'纯惯导'}
 FIX = {0:'无定位',1:'单点定位 / 定向',2:'伪距差分 / 定向',3:'组合推算',4:'RTK 固定解 / 定向',
        5:'RTK 浮点解 / 定向',6:'单点定位 / 未定向',7:'伪距差分 / 未定向',8:'RTK 固定解 / 未定向',9:'RTK 浮点解 / 未定向'}
+# Coverage answers a different question from precision: every non-zero fix
+# mode, including RTK fixed (4/8) and RTK float (5/9), is a valid reported
+# position when the coordinates are present and non-zero.  The individual
+# fix mode remains available for interpreting accuracy and readiness.
+VALID_POSITION_FIX_MODES = frozenset(range(1, 10))
+
+
+def is_valid_position(fix_mode, lat, lon):
+    return (fix_mode in VALID_POSITION_FIX_MODES and
+            all(isinstance(value, (int, float)) and math.isfinite(value) for value in (lat, lon)) and
+            (lat != 0 or lon != 0))
+
+
 WARN = {0:'GNSS 中断（保留位）',1:'轮速数据中断',2:'PPS 中断（保留位）',3:'陀螺异常（保留位）',
         4:'加表异常（保留位）',5:'主天线短路',6:'主天线断路',7:'副天线短路',8:'副天线断路',
         9:'移动网络（保留位）',10:'SIM（保留位）',11:'CORS（保留位）',12:'倒车状态',13:'CPU 降频',14:'CPU 高温'}
@@ -88,7 +101,7 @@ def parse(frame, bound_sn=None):
         raise ValueError('range')
     if result['age'] < 0 or any(result[k] is not None and result[k] < 0 for k in EXT):
         raise ValueError('negative_quality')
-    result['valid_pos'] = int(result['fix_mode'] != 0 and (result['lat'] != 0 or result['lon'] != 0))
+    result['valid_pos'] = int(is_valid_position(result['fix_mode'], result['lat'], result['lon']))
     return result
 
 

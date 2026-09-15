@@ -1,0 +1,11 @@
+.icon-btn.mobile-menu,
+.icon-btn.sidebar-close {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .icon-btn.mobile-menu,
+  .icon-btn.sidebar-close {
+    display: grid;
+  }
+}

@@ -31,7 +31,7 @@ test('a successful tile cannot hide another tile failure; recovery/unload clears
   handlers.tileerror({tile:first});handlers.tileunload({tile:first});assert.equal(notice.hidden,true);
 });
 
-async function appHarness(){
+async function appHarness({deferFrames=false,legacyArrayAt=false}={}){
   const nodes=new Map(),calls={lines:[],circles:[],moves:[],centers:[],pans:[],charts:new Map(),options:new Map(),queries:[],groups:[],connections:[]};
   const handlers=new Map(),documentHandlers=new Map(),instances=new Map();
   const node=id=>{
@@ -46,7 +46,7 @@ async function appHarness(){
     }
     return nodes.get(id);
   };
-  const shortcuts=[900,3600,86400].map(n=>{const b=node('range-'+n);b.dataset.range=String(n);return b;});
+  const shortcuts=[900,3600,86400,172800,345600,432000,864000,2592000].map(n=>{const b=node('range-'+n);b.dataset.range=String(n);return b;});
   node('timeAnchor').value='now';node('autoRefresh').checked=true;node('eventFilter').value='all';
   for(const key of ['name','vehicle','fleet','mount_confirmed'])node('deviceForm').elements[key]=node('field-'+key);
   const group=()=>{const g={layers:[],addTo(){return this;},clearLayers(){this.layers=[];},getLayers(){return this.layers;},getBounds(){return {pad(){return this;}};}};calls.groups.push(g);return g;};
@@ -57,11 +57,13 @@ async function appHarness(){
     circleMarker(p){calls.circles.push(Array.from(p));return {addTo(g){g.layers?.push(this);return this;},bindTooltip(){return this;},on(){return this;},setLatLng(x){calls.moves.push(Array.from(x));return this;}};}
   };
   const echarts={getInstanceByDom:el=>instances.get(el.id),connect:group=>calls.connections.push(group),init(el){const chart={setOption(o,replace){calls.options.set(el.id,replace?o:{...calls.options.get(el.id),...o});},clear(){calls.options.set(el.id,{});},off(){},on(type,fn){calls.charts.set(type,fn);},resize(){},getZr(){return {off(){},on(){}};}};instances.set(el.id,chart);return chart;}};
-  let now=1787750400000,devices=[],respond=async params=>queryFixture(params),offlineRespond=async()=>({}),offlineUpload=null,point=null,interval;
+  let now=1787750400000,devices=[],respond=async params=>queryFixture(params),offlineRespond=async()=>({}),offlineUpload=null,point=null,interval,frameId=0;
+  const frames=new Map();
   class Clock extends Date{static now(){return now;}}
   const context={console,Date:Clock,CTMCMap,L,echarts,URLSearchParams,Event:class{constructor(type){this.type=type;}},
     document:{getElementById:node,querySelectorAll:selector=>selector==='[data-range]'?shortcuts:selector==='.signal-data-note'?[...nodes.values()].filter(n=>n.id.startsWith('signal-note-')):[],addEventListener(type,fn){documentHandlers.set(type,fn);}},
-    window:{L,echarts,addEventListener(){},scrollTo(){}},setInterval(fn){interval=fn;},setTimeout(){},clearTimeout(){},requestAnimationFrame(){},
+    window:{L,echarts,addEventListener(){},scrollTo(){}},setInterval(fn){interval=fn;},setTimeout(){},clearTimeout(){},
+    requestAnimationFrame(fn){if(!deferFrames)return undefined;const id=++frameId;frames.set(id,fn);return id;},cancelAnimationFrame(id){frames.delete(id);},
     fetch:async(url,options={})=>{let data;if(url.includes('api/query?')){const params=new URLSearchParams(url.split('?')[1]);calls.queries.push(params);data=await respond(params);}
       else if(url.includes('api/offline/analyze?')){offlineUpload=options.body;calls.offlineOptions=options;data=await offlineRespond(url,options);}
       else if(url.includes('api/point?'))data=point;
@@ -71,10 +73,12 @@ async function appHarness(){
       return {ok:true,json:async()=>data};}
   };
   vm.createContext(context);
-  vm.runInContext(fs.readFileSync(require.resolve('../static/app.js'),'utf8')+'\nthis.appTest={renderMap,renderOverview,selectTime,playbackPoint,locateEvent,buildChart,renderVibration,renderServiceState,query,chooseRange,setRange,setView,loadDevices,loadQuarantine,stationaryRange,renderFilterSummary,renderOfflineAnalysis,chooseOfflineFile,analyzeOfflineFile,state,setData(d){state.data=d;state.device={id:"SN1",rules:{}};},setOfflineData(d){state.offlineData=d;}};',context);
+  if(legacyArrayAt)vm.runInContext('Array.prototype.at=undefined',context);
+  vm.runInContext(fs.readFileSync(require.resolve('../static/app.js'),'utf8')+'\nthis.appTest={renderMap,renderOverview,renderEvents,selectTime,playbackPoint,locateEvent,buildChart,renderVibration,renderServiceState,renderFilterSummary,renderOfflineAnalysis,query,chooseRange,setRange,setView,loadDevices,loadQuarantine,stationaryRange,chooseOfflineFile,analyzeOfflineFile,state,setData(d){state.data=d;state.device={id:"SN1",rules:{}};},setOfflineData(d){state.offlineData=d;}};',context);
   await new Promise(resolve=>setImmediate(resolve));
   const app=context.appTest;
-  return {app,calls,node,shortcuts,interval:()=>interval(),respond(fn){respond=fn;},offlineRespond(fn){offlineRespond=fn;},offlineUpload:()=>offlineUpload,setNow(value){now=value;},setPoint(p){point=p;},
+  return {app,calls,node,shortcuts,interval:()=>interval(),respond(fn){respond=fn;},offlineRespond(fn){offlineRespond=fn;},offlineUpload:()=>offlineUpload,setNow(value){now=value;},setPoint(p){point=p;},setDeviceResponse(list){devices=list;},
+    flushFrames(){while(frames.size){const [id,fn]=frames.entries().next().value;frames.delete(id);fn();}},pendingFrames:()=>frames.size,
     setDevices(list){devices=list;app.state.devices=list;app.state.device=list[0];node('deviceSelect').value=list[0]?.id||'';},
     async change(id,type='change'){return handlers.get(id+':'+type)?.({target:node(id)});},
     async clickRange(seconds){return documentHandlers.get('click')({target:{closest:()=>node('range-'+seconds)}});}};
@@ -84,36 +88,70 @@ function queryFixture(params,total=3){
   const start=+params.get('start'),end=+params.get('end');
   const t=end-2,track=total?[{t,lat:31.2456,lon:121.616,speed:.1}]:[];
   const vibration=total?{available:true,start:t-1,end:t,samples:11,sample_hz:10,duration_s:1,frequency_resolution_hz:.1,usable_frequency_hz:[.2,4],time:[[t*1000-1000,.01,null],[t*1000,.02,.015]],spectrum:[[1,.01],[2,.03]],metrics:{rms_g:.015,peak_g:.02,peak_to_peak_g:.03,crest_factor:1.33,dominant_hz:2,dominant_amplitude_g:.03},selection:{method:'筛选时段内去趋势动态 RMS 最大的连续 60 秒窗口',metric:'线性去趋势动态 RMS',score_g:.03,candidate_windows:1},range:{available:true,start,end,samples:total,buckets:1,series_fields:['timestamp_ms','rms_g','peak_g','mean_g','min_g','max_g','count'],series:[[start*1000,.011,.02,1,.98,1.02,total]],metrics:{rms_g:.011,peak_g:.02,peak_to_peak_g:.04,mean_g:1},capability:'10 Hz 仅用于 0–4 Hz 低频载体振动观察'},method:'测试处理链',source:'测试连续原始窗',capability:'10 Hz 仅用于 0–4 Hz 低频载体振动观察'}:{available:false,reason:'所选时段无采样',range:{available:false,reason:'所选时段无采样',capability:'10 Hz 仅用于 0–4 Hz 低频载体振动观察'},capability:'10 Hz 仅用于 0–4 Hz 低频载体振动观察'};
-  return {device_id:params.get('device'),start,end,total,track,events:{total:0,items:[]},segments:[],summary:{first_t:total?t:null,last_t:total?t:null,distance_km:0,moving_s:0,max_kmh:.36,fixed_pct:100,gap_count:0},series:{speed:total?[[t*1000,.1,.1,.1]]:[],gx:total?[[t*1000,.2,.2,.2]]:[]},vibration,gaps:[],aggregation:{buckets:total?1:0,bucket_s:(end-start)/700},quality:{version:1,total,anomaly_samples:0,status_samples:0,unavailable_samples:0,pending_samples:0,contexts:[],excluded_fields:{},reasons:[]}};
+  return {device_id:params.get('device'),start,end,total,track,events:{total:0,items:[]},segments:[],summary:{first_t:total?t:null,last_t:total?t:null,distance_km:0,moving_s:0,max_kmh:.36,fixed_pct:100,valid_pct:total?100:0,gap_count:0,speed_coverage_pct:total?100:0},series:{speed:total?[[t*1000,.1,.1,.1]]:[],gx:total?[[t*1000,.2,.2,.2]]:[]},vibration,gaps:[],aggregation:{buckets:total?1:0,bucket_s:(end-start)/700},quality:{version:1,total,anomaly_samples:0,status_samples:0,unavailable_samples:0,pending_samples:0,contexts:[],excluded_fields:{},reasons:[]}};
 }
 function offlineFixture(){
   const start=1787731200,end=1787731265,track=[{t:start,lat:31.2456,lon:121.616,speed:2,break_before:true},{t:end,lat:31.2457,lon:121.6161,speed:3}];
-  return {device_id:'OFFLINE1',start,end,total:650,track,gaps:[],segments:[{start,end,state:'moving',distance_m:160,max_kmh:10.8}],events:{total:1,truncated:false,interpretation:'重新计算',items:[{id:1,kind:'overspeed',label:'速度超业务阈值',severity:'warning',start:start+20,end:start+23,point_t:start+22,peak:90,threshold:80,samples:30}]},summary:{first_t:start,last_t:end,distance_km:.16,moving_s:65,max_kmh:90,fixed_pct:92,gap_count:0},series:{speed:[[start*1000,2,1,25]],gx:[[start*1000,.2,.1,.4]],heading:[[start*1000,10,10,10]]},aggregation:{source:'offline_csv',buckets:1,bucket_s:1,query_ms:12.4},quality:{contexts:[],excluded_fields:{}},offline:{format:'CTMC filtered telemetry CSV',bytes:2048,rows:650,rule_source:'默认工程规则',rule_version:1,mount_confirmed:false,persisted:false}};
+  return {device_id:'OFFLINE1',start,end,total:650,track,gaps:[],segments:[{start,end,state:'moving',distance_m:160,max_kmh:10.8}],events:{total:1,truncated:false,interpretation:'重新计算',items:[{id:1,kind:'overspeed',label:'速度超业务阈值',severity:'warning',start:start+20,end:start+23,point_t:start+22,peak:90,threshold:80,samples:30}]},summary:{first_t:start,last_t:end,distance_km:.16,moving_s:65,max_kmh:90,fixed_pct:92,gap_count:0,speed_coverage_pct:100},series:{speed:[[start*1000,2,1,25]],gx:[[start*1000,.2,.1,.4]],heading:[[start*1000,10,10,10]]},aggregation:{source:'offline_csv',buckets:1,bucket_s:1,query_ms:12.4},quality:{contexts:[],excluded_fields:{}},offline:{format:'CTMC filtered telemetry CSV',bytes:2048,rows:650,rule_source:'默认工程规则',rule_version:1,mount_confirmed:false,persisted:false}};
 }
 
-test('reference speed stays distinct in online and offline charts; missing trusted values are not zero',async()=>{
+test('online and offline charts expose only the GPCHCX speed channel',async()=>{
   const h=await appHarness(),data=queryFixture(new URLSearchParams({start:'100',end:'200',device:'SN1'}));
   data.series.speed=[[198000,null,null,null]];
-  data.series.speed_reference=[[198000,.5,.4,.6]];
-  data.series.speed_reference_low=[[198000,0,0,0]];
-  data.series.speed_reference_high=[[198000,1.4,1.3,1.5]];
   h.app.setData(data);h.app.renderOverview();
-  const option=h.calls.options.get('speedChart'),reference=option.series.find(s=>s.name==='参考地速（非可信）');
-  assert.ok(reference);assert.equal(reference.lineStyle.type,'dotted');assert.equal(reference.connectNulls,false);
-  assert.equal(reference.markLine,undefined);
+  const option=h.calls.options.get('speedChart');
+  assert.equal(option.series.some(s=>/参考地速/.test(s.name)),false);
+  assert.ok(option.series.some(s=>s.name==='GPCHCX 地速'));
   const html=option.tooltip.formatter([{value:[198000,1.8]}]);
-  assert.match(html,/可信地速：—/);assert.match(html,/参考地速：1.80 km\/h/);assert.match(html,/不计最高速度/);
-  assert.equal(option.graphic[0].invisible,true);
+  assert.match(html,/GPCHCX 地速：—/);assert.doesNotMatch(html,/参考地速/);
+  assert.equal(option.graphic[0].invisible,false);
   h.app.setOfflineData({...offlineFixture(),series:data.series});h.app.renderOfflineAnalysis();
-  assert.ok(h.calls.options.get('offlineSpeedChart').series.some(s=>s.name==='参考地速（非可信）'));
+  const offline=h.calls.options.get('offlineSpeedChart');
+  assert.ok(offline.series.some(s=>s.name==='GPCHCX 地速'));
+  assert.equal(offline.series.some(s=>/参考地速/.test(s.name)),false);
 });
 
-test('a reference-only gap cannot create derived acceleration or braking from a fabricated zero',async()=>{
+test('online and offline rendering works without Array.prototype.at',async()=>{
+  const h=await appHarness({legacyArrayAt:true}),data=queryFixture(new URLSearchParams({start:'100',end:'200',device:'SN1'}));
+  h.app.setData(data);
+  assert.doesNotThrow(()=>{h.app.renderOverview();h.app.renderMap();});
+  h.app.setOfflineData(offlineFixture());
+  assert.doesNotThrow(()=>h.app.renderOfflineAnalysis());
+});
+
+test('overview reports valid positioning coverage for configured AHRS including RTK fixed and float',async()=>{
+  const h=await appHarness(),data=queryFixture(new URLSearchParams({start:'100',end:'200',device:'SN1'}));
+  data.summary.valid_pct=72.5;data.summary.fixed_pct=0;
+  h.app.setData(data);h.app.renderOverview();
+  const html=h.node('kpis').innerHTML;
+  assert.match(html,/有效定位占比/);
+  assert.match(html,/72\.5/);
+  assert.doesNotMatch(html,/RTK 固定解占比/);
+  h.setDevices([deviceFixture()]);
+  h.respond(async params=>{const result=queryFixture(params);result.summary.valid_pct=72.5;result.summary.fixed_pct=0;return result;});
+  await h.clickRange(900);
+  assert.match(h.node('notice').textContent,/组合 AHRS/);
+  assert.match(h.node('notice').textContent,/有效定位占比 72\.5%/);
+  assert.match(h.node('notice').textContent,/包含 RTK 固定\/浮点/);
+  assert.doesNotMatch(h.node('notice').textContent,/所选时段 RTK 固定解占比 \d/);
+});
+
+test('a missing GPCHCX speed gap cannot create derived acceleration or braking',async()=>{
   const h=await appHarness(),data=queryFixture(new URLSearchParams({start:'100',end:'200',device:'SN1'}));
   data.series.speed=[[100000,1,1,1],[101000,null,null,null],[102000,1,1,1]];
-  data.series.speed_reference=[[101000,.5,.5,.5]];
   h.app.setData(data);h.app.setView('signals');
   assert.equal(h.calls.options.get('signalAccelerationChart').series[0].data.filter(r=>Number.isFinite(r[1])).length,0);
+});
+
+test('parameter charts paint in two-chart frames and stale work stops after leaving the view',async()=>{
+  const h=await appHarness({deferFrames:true}),data=queryFixture(new URLSearchParams({start:'100',end:'200',device:'SN1'}));
+  h.app.setData(data);h.app.setView('signals');
+  assert.ok(h.calls.options.has('signal-0'));assert.ok(h.calls.options.has('signal-1'));
+  assert.equal(h.calls.options.has('signal-2'),false);assert.ok(h.pendingFrames()>0);
+  h.app.setView('events');h.flushFrames();
+  assert.equal(h.calls.options.has('signal-2'),false,'hidden parameter charts must not continue rendering');
+  h.app.setView('signals');h.flushFrames();
+  for(let i=0;i<12;i++)assert.ok(h.calls.options.has('signal-'+i),`signal-${i}`);
 });
 
 test('actual application converts routes, endpoints, events, playback, chart and event centering only at display boundary',async()=>{
@@ -122,7 +160,7 @@ test('actual application converts routes, endpoints, events, playback, chart and
   const track=Object.freeze([point,Object.freeze({...point,t:101,lat:31.2457}),Object.freeze({...point,t:120,lat:31.2459,break_before:true})]);
   const original=JSON.stringify(track);
   setPoint(point);
-  const data={start:100,end:120,total:3,track,events:{items:[{id:1,point_t:100,label:'test',start:100}]},summary:{first_t:100,last_t:120},series:{speed:[]},gaps:[],aggregation:{bucket_s:1}};
+  const data={start:100,end:120,total:3,track,events:{items:[{id:1,kind:'overspeed',point_t:100,label:'test',start:100}]},summary:{first_t:100,last_t:120},series:{speed:[]},gaps:[],aggregation:{bucket_s:1}};
   mapTest.setData(data);mapTest.renderMap();
   assert.equal(calls.lines.length,1);assert.equal(calls.lines[0].length,2); // outage is still not bridged
   near(calls.lines[0][0],CTMCMap.latLng(point));near(calls.lines[0][1],CTMCMap.latLng(track[1]));
@@ -145,6 +183,37 @@ test('actual application converts routes, endpoints, events, playback, chart and
   // Returning to real motion restores measured coordinates, without a sticky anchor.
   mapTest.setData(data);mapTest.renderMap();mapTest.selectTime(101);
   near(calls.moves.at(-1),CTMCMap.latLng(track[1]));assert.equal(node('stationaryMapNote').hidden,true);
+});
+
+test('threshold event views reject quality/status records at the display boundary',async()=>{
+  const h=await appHarness(),data=queryFixture(new URLSearchParams({start:'100',end:'200',device:'SN1'}));
+  data.events={total:3,items:[
+    {id:1,kind:'data_gap',label:'数据时间断档',point_t:198,start:198,end:199,peak:1,threshold:3},
+    {id:2,kind:'position_std',label:'位置不确定度偏大',point_t:198,start:198,end:198,peak:4,threshold:2},
+    {id:3,kind:'overspeed',label:'速度超业务阈值',point_t:198,start:198,end:199,peak:90,threshold:80,samples:2,rule_version:1},
+  ],group_counts:{speed:1,acceleration:0,attitude:0,vibration:0},top_events:{speed:[{id:3,kind:'overspeed',label:'速度超业务阈值',point_t:198,start:198,end:199,peak:90,threshold:80,samples:2,rule_version:1}],acceleration:[],attitude:[],vibration:[]}};
+  h.app.setData(data);h.app.renderOverview();h.app.renderEvents();
+  assert.match(h.node('eventPreview').innerHTML,/速度超业务阈值/);
+  assert.doesNotMatch(h.node('eventPreview').innerHTML,/数据时间断档|位置不确定度偏大/);
+  assert.match(h.node('eventList').innerHTML,/速度超业务阈值/);
+  assert.match(h.node('eventTop10').innerHTML,/各参数超阈值 Top10/);
+  assert.match(h.node('eventTop10').innerHTML,/超出 \+10\.00 km\/h/);
+  assert.match(h.node('eventList').innerHTML,/超出 \+10\.00 km\/h/);
+  assert.doesNotMatch(h.node('eventList').innerHTML,/数据时间断档|位置不确定度偏大/);
+  assert.match(h.node('eventSummary').innerHTML,/无需手工维护事件清单/);
+});
+
+test('event detail marks the concrete peak threshold excess and ratio',async()=>{
+  const h=await appHarness(),data=queryFixture(new URLSearchParams({start:'100',end:'200',device:'SN1'}));
+  const event={id:7,kind:'overspeed',label:'速度超业务阈值',point_t:198,start:198,end:199,peak:95,threshold:85,samples:2,rule_version:3};
+  data.events={total:1,items:[event],group_counts:{speed:1,acceleration:0,attitude:0,vibration:0},top_events:{speed:[event],acceleration:[],attitude:[],vibration:[]}};
+  h.app.setData(data);h.app.state.device={id:'SN1',rules:{version:3,speed_kmh:85},mount_confirmed:true};
+  h.setPoint({t:198,device_id:'SN1',lat:31.2456,lon:121.616,speed:1,valid_pos:1,fix_label:'固定',nav_label:'已定向',heading:10,pitch:0,roll:0,ax:1,ay:0,az:0,warning:0,quality:{reasons:[]}});
+  h.app.renderOverview();h.app.renderMap();await h.app.locateEvent(7);
+  assert.match(h.node('pointDetail').innerHTML,/超阈值明细/);
+  assert.match(h.node('pointDetail').innerHTML,/95\.00 km\/h/);
+  assert.match(h.node('pointDetail').innerHTML,/\+10\.00 km\/h/);
+  assert.match(h.node('pointDetail').innerHTML,/\+11\.8%/);
 });
 
 test('long-window playback interpolates between retained route anchors and respects breaks',async()=>{
@@ -187,16 +256,16 @@ test('overview vibration uses the selected range, links the speed axis and keeps
   assert.equal(time.series[0].data[0][1],.011);assert.equal(time.series[1].data[0][1],.02);
   assert.equal(time.tooltip.renderMode,'html');assert.equal(time.tooltip.confine,true);assert.equal(time.tooltip.axisPointer.type,'line');
   const signalTooltip=time.tooltip.formatter([{value:[h.app.state.data.start*1000,.011],dataIndex:0}]);
-  assert.match(signalTooltip,/可信地速：/);assert.match(signalTooltip,/振动 RMS：/);assert.match(signalTooltip,/振动峰值偏差：/);assert.match(signalTooltip,/振动有效值：3 点/);
+  assert.match(signalTooltip,/GPCHCX 地速：/);assert.match(signalTooltip,/振动 RMS：/);assert.match(signalTooltip,/振动峰值偏差：/);assert.match(signalTooltip,/振动有效值：3 点/);
   const speedTooltip=speed.tooltip.formatter([{value:[h.app.state.data.start*1000,.1],dataIndex:0}]);
-  assert.equal(speed.tooltip.renderMode,'html');assert.equal(speed.tooltip.confine,true);assert.match(speedTooltip,/可信地速：/);assert.match(speedTooltip,/振动 RMS：/);assert.equal(speed.xAxis.min,time.xAxis.min);assert.equal(speed.xAxis.max,time.xAxis.max);
+  assert.equal(speed.tooltip.renderMode,'html');assert.equal(speed.tooltip.confine,true);assert.match(speedTooltip,/GPCHCX 地速：/);assert.match(speedTooltip,/振动 RMS：/);assert.equal(speed.xAxis.min,time.xAxis.min);assert.equal(speed.xAxis.max,time.xAxis.max);
   assert.deepEqual(spectrum.series[0].data,[[1,.01],[2,.03]]);assert.equal(spectrum.xAxis.max,4);
   assert.match(h.node('overviewVibrationNote').textContent,/动态 RMS 最大的连续 60 秒窗/);assert.deepEqual(h.calls.connections,['overview-speed-vibration']);
   h.app.setView('signals');
   assert.equal(h.calls.options.has('signalVibrationTimeChart'),false);assert.equal(h.calls.options.has('signalVibrationSpectrumChart'),false);
   assert.match(h.node('signal-note-0').textContent,/机体相对水平的俯仰和横滚转角/);
   assert.doesNotMatch(h.calls.options.get('signal-0').legend.data.join('、'),/航向/);
-  h.respond(async params=>queryFixture(params,0));await h.clickRange(900);
+  h.respond(async params=>queryFixture(params,0));await h.clickRange(900);h.app.setView('overview');
   assert.match(h.node('overviewVibrationState').textContent,/暂无可分析/);
   assert.match(h.calls.options.get('overviewVibrationTimeChart').graphic[0].style.text,/所选时段无采样/);
 });
@@ -205,7 +274,7 @@ test('overview and inertial curves draw dashed alarm thresholds for direct chann
   const h=await appHarness(),params=new URLSearchParams({start:'100',end:'200',device:'SN1'}),rules={version:1,speed_kmh:80,age_s:10,roll_deg:15,pitch_deg:12,position_std_m:2,shock_g:.5},data=queryFixture(params);
   data.quality.excluded_fields={lat:2,lon:3};h.app.setData(data);h.app.state.device={id:'SN1',rules,mount_confirmed:true};
   h.app.renderOverview();
-  const speed=h.calls.options.get('speedChart'),speedLine=speed.series.find(s=>s.name==='可信地速');
+  const speed=h.calls.options.get('speedChart'),speedLine=speed.series.find(s=>s.name==='GPCHCX 地速');
   assert.equal(speedLine.markLine.lineStyle.type,'dashed');assert.equal(speedLine.markLine.data[0].yAxis,80);
   const overviewVibration=h.calls.options.get('overviewVibrationTimeChart');
   assert.equal(overviewVibration.series[1].markLine.lineStyle.type,'dashed');assert.deepEqual(Array.from(overviewVibration.series[1].markLine.data,map=>map.yAxis),[.01,.8]);
@@ -252,7 +321,7 @@ test('quality page labels legacy stationary records as audit-only',async()=>{
   }]}});
   h.app.renderFilterSummary();
   assert.match(h.node('filterSummary').innerHTML,/历史静止记录（仅审计）/);
-  assert.match(h.node('filterSummary').innerHTML,/v8 使用可信速度与持续安静联合判定/);
+  assert.match(h.node('filterSummary').innerHTML,/每个采样均按三轴振动阈值判定/);
 });
 
 test('quality page distinguishes historical replay from user-confirmed stationary facts',async()=>{
@@ -264,21 +333,23 @@ test('quality page distinguishes historical replay from user-confirmed stationar
   }]}});
   h.app.renderFilterSummary();
   assert.match(h.node('filterSummary').innerHTML,/历史静止记录（仅审计）/);
-  assert.match(h.node('filterSummary').innerHTML,/旧静止上下文仅作审计/);
+  assert.match(h.node('filterSummary').innerHTML,/不延伸使用旧静止上下文/);
 });
 
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
-test('quick ranges anchor to the fresh current clock or freshly loaded device sample, and every chart uses exact query bounds',async()=>{
+test('all optimized quick ranges anchor to the fresh clock and active parameter charts use exact query bounds',async()=>{
   const h=await appHarness();h.setDevices([deviceFixture()]);
   h.app.setView('signals');
-  for(const span of [900,3600,86400]){
+  const presets=new Map([[900,360],[3600,360],[86400,360],[172800,288],[345600,288],[432000,288],[864000,240],[2592000,180]]);
+  for(const span of presets.keys()){
     h.setNow(1787750400000+span*1000);
     await h.clickRange(span);
     const p=h.calls.queries.at(-1),d=h.app.state.data;
     assert.ok(d,h.node('error').textContent);assert.equal(+p.get('end'),1787750400+span);assert.equal(d.end-d.start,span);
-    for(const id of ['speedChart',...Array.from({length:12},(_,i)=>'signal-'+i)]){
+    assert.equal(+p.get('bins'),presets.get(span));
+    for(const id of Array.from({length:12},(_,i)=>'signal-'+i)){
       const o=h.calls.options.get(id);assert.equal(o.xAxis.min,d.start*1000,id);assert.equal(o.xAxis.max,d.end*1000,id);
-      if(id!=='speedChart'){assert.equal(o.dataZoom[0].start,0);assert.equal(o.dataZoom[0].end,100);}
+      assert.equal(o.dataZoom[0].start,0);assert.equal(o.dataZoom[0].end,100);
     }
     assert.match(h.node('rangeCaption').textContent,/已应用 · 截至现在/);
   }
@@ -291,6 +362,7 @@ test('quick ranges anchor to the fresh current clock or freshly loaded device sa
   assert.match(h.node('rangeCaption').textContent,/截至最新采样/);
   // Navigate away and query again: hidden charts cannot retain an old series.
   h.app.setView('overview');await h.clickRange(3600);
+  assert.equal(h.calls.options.get('speedChart').xAxis.min,(1787741398-3600)*1000);
   assert.equal(h.calls.options.get('signal-0').series,undefined);
   h.app.setView('signals');assert.equal(h.calls.options.get('signal-0').xAxis.min,(1787741398-3600)*1000);
   await h.clickRange(86400);assert.match(h.calls.options.get('signal-0').xAxis.axisLabel.formatter(1787741398000),/08-26\n/);
@@ -308,7 +380,18 @@ test('manual time input suspends auto-follow, applies exact Beijing time, and re
   const count=h.calls.queries.length;h.setNow(1787759400000);await h.interval();
   assert.equal(h.calls.queries.length,count);assert.equal(h.node('endTime').value,'2026-08-26T16:10:00');
   await h.clickRange(3600);h.node('autoRefresh').checked=true;await h.change('autoRefresh');
+  const refreshed=deviceFixture('SN1',h.app.state.device.last_t+1);h.setDeviceResponse([refreshed]);
   h.setNow(1787759430000);await h.interval();assert.equal(h.app.state.data.end,1787759430);
+});
+
+test('auto refresh skips identical latest samples and queries after a new sample arrives',async()=>{
+  const h=await appHarness(),device=deviceFixture();h.setDevices([device]);
+  await h.clickRange(900);
+  const queryCount=h.calls.queries.length;
+  h.setNow(1787759400000);await h.interval();
+  assert.equal(h.calls.queries.length,queryCount,'clock movement alone must not redraw the same data');
+  h.setDeviceResponse([deviceFixture('SN1',device.last_t+1)]);await h.interval();
+  assert.equal(h.calls.queries.length,queryCount+1,'a newer device sample must trigger one relative refresh');
 });
 
 test('rapid clicks serialize queries and discard stale results; device changes stay isolated',async()=>{
@@ -328,9 +411,10 @@ test('rapid clicks serialize queries and discard stale results; device changes s
 });
 
 test('empty, invalid and failed selections remove old map, charts, KPIs and quarantine results',async()=>{
-  const h=await appHarness();h.setDevices([deviceFixture()]);h.app.setView('signals');await h.clickRange(3600);
+  const h=await appHarness();h.setDevices([deviceFixture()]);await h.clickRange(3600);h.app.setView('signals');
   assert.ok(h.calls.groups[0].layers.length);h.node('quarantineList').innerHTML='old excluded samples';
   h.respond(async p=>queryFixture(p,0));await h.clickRange(900);
+  h.app.setView('overview');
   assert.equal(h.app.state.data.total,0);assert.equal(h.calls.groups[0].layers.length,0);assert.match(h.node('kpis').innerHTML,/所选时段无采样/);
   assert.equal(h.node('playBtn').disabled,true);assert.equal(h.node('playTime').textContent,'--:--:--');
   assert.ok(h.calls.options.get('signal-1').series.every(s=>s.data.length===0));assert.match(h.calls.options.get('signal-1').graphic[0].style.text,/无采样/);

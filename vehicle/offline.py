@@ -9,10 +9,10 @@ import re
 import time
 
 from .aggregate import QueryCombiner, RollupBuilder
-from .protocol import NUMERIC, gps_to_unix
-from .rules import DEFAULTS, LABELS, conditions
+from .protocol import NUMERIC, gps_to_unix, is_valid_position
+from .rules import DEFAULTS, LABELS, THRESHOLD_EVENT_META, threshold_conditions
 from . import quality
-from .ground_speed import valid_reference
+from .ground_speed import METHOD as GROUND_SPEED_METHOD, finite as finite_ground_speed, motion_state, valid_reference
 
 
 EXPORT_FIELDS = (['device_id','t','protocol','week','tow'] + NUMERIC +
@@ -115,8 +115,7 @@ def _point(row, line):
         raise ValueError(f'第 {line} 行速度越界')
     if p['age'] is not None and p['age'] < 0:
         raise ValueError(f'第 {line} 行差分延迟不能为负数')
-    p.update(valid_pos=int(p['fix_mode'] != 0 and p['lat'] is not None and p['lon'] is not None and
-                           (p['lat'] != 0 or p['lon'] != 0)),
+    p.update(valid_pos=int(is_valid_position(p['fix_mode'], p['lat'], p['lon'])),
              q_version=version,q_context=(row['stationary_context'] or '').strip() or None,
              q_mask=sum(quality.BITS[key] for key in excluded),
              q_reasons=sum(quality.REASON_BITS[key] for key in reason_codes))
@@ -124,14 +123,19 @@ def _point(row, line):
         estimate = json.loads(row['ground_speed_json'])
         if (estimate['state'] not in ('moving','stationary','unknown') or
                 estimate['value'] != p['speed'] or
-                (estimate['state'] == 'moving' and (estimate['value'] is None or estimate['value'] <= 0)) or
-                (estimate['state'] == 'stationary' and estimate['value'] != 0) or
+                estimate.get('source') != 'GPCHCX.speed' or
+                estimate.get('method') != GROUND_SPEED_METHOD or
+                (protocol == 'GPCHCX' and not finite_ground_speed(estimate.get('raw_speed'))) or
+                (protocol != 'GPCHCX' and estimate.get('reason') != 'non_gpchcx') or
+                (estimate['state'] == 'moving' and
+                 (estimate['value'] != estimate.get('raw_speed') or motion_state(p) != 'moving')) or
+                (estimate['state'] == 'stationary' and
+                 (estimate['value'] != 0 or motion_state(p) != 'stationary')) or
                 (estimate['state'] == 'unknown' and estimate['value'] is not None) or
-                not valid_reference(estimate) or
-                (estimate.get('reference') is not None and (p['nav_mode'] not in (1,2) or not p['valid_pos']))):
+                not valid_reference(estimate)):
             raise ValueError()
     except (ValueError, TypeError, KeyError):
-        raise ValueError(f'第 {line} 行可信地速元数据无效') from None
+        raise ValueError(f'第 {line} 行 GPCHCX 地速元数据无效') from None
     p['q_ground'] = estimate
     return p
 
@@ -150,7 +154,7 @@ class EventDetector:
         while self.history and self.history[0]['t'] < p['t']-1.5:
             self.history.popleft()
         baseline = next((item for item in self.history if p['t']-item['t']>=.8),None)
-        signals = conditions(p,self.previous,baseline,self.rules,self.mount_confirmed)
+        signals = threshold_conditions(p,self.previous,baseline,self.rules,self.mount_confirmed)
         for kind in list(self.active):
             if kind not in signals: del self.active[kind]
         for kind,(value,threshold,severity,dwell) in signals.items():
@@ -165,10 +169,12 @@ class EventDetector:
                 continue
             if entry['event'] is None:
                 self.next_id += 1;self.total += 1
+                meta = THRESHOLD_EVENT_META.get(kind, {})
                 entry['event'] = dict(id=self.next_id,device_id=p['device_id'],kind=kind,label=LABELS.get(kind,kind),
                     severity=severity,start=entry['start'],end=p['t'],peak=entry['peak'],threshold=threshold,
                     samples=entry['samples'],rule_version=self.rules['version'],point_t=entry['point_t'],
-                    status='offline',note='',actor='',updated=p['t'])
+                    status='offline',note='',actor='',updated=p['t'],event_category='threshold',
+                    event_group=meta.get('group'),unit=meta.get('unit'),value_precision=meta.get('precision'))
                 self.items.append(entry['event'])
             else:
                 entry['event'].update(end=p['t'],peak=entry['peak'],samples=entry['samples'],point_t=entry['point_t'])
@@ -276,7 +282,7 @@ def analyze_stream(source, byte_size, rule_resolver=None, mount_mode='auto', com
         rule_source=rule_source,rule_version=rules['version'],mount_confirmed=bool(mount_confirmed),
         persisted=False,limits=dict(max_bytes=limit,max_rows=MAX_ROWS,max_span_days=31))
     result['aggregation']['query_ms'] = round((time.perf_counter()-began)*1000,1)
-    result['aggregation']['method'] = '离线复用版本化可信地速与状态，不从已过滤数据重新估速；不补零、不插值；轨迹、区段和候选事件与在线同口径'
+    result['aggregation']['method'] = '离线复用版本化 GPCHCX.speed 与振动运动状态；只对静止置 0，漂移缺测，不补值、不插值；轨迹、区段和候选事件与在线同口径'
     return result
 
 

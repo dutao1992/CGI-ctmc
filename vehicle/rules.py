@@ -2,14 +2,51 @@
 import math
 from .protocol import ACTIVE_WARNING_MASK
 
-DEFAULTS = {'version': 1, 'speed_kmh': 80, 'accel_ms2': 3, 'brake_ms2': 3.5,
-            'roll_deg': 15, 'pitch_deg': 12, 'shock_g': 0.5, 'age_s': 10,
-            'position_std_m': 2, 'gap_s': 3, 'dwell_s': 2}
+# The operational console is intentionally conservative: on the current
+# CGI-430 test vehicle these values keep each 96-hour parameter family in the
+# tens rather than turning every noisy sample into an item for manual review.
+# Data-quality anomalies remain governed by quality.py and never become
+# threshold events.
+THRESHOLD_POLICY_VERSION = 2
+THRESHOLD_DEFAULTS = {'speed_kmh': 85, 'accel_ms2': 14, 'brake_ms2': 15,
+                      'roll_deg': 20, 'pitch_deg': 18, 'shock_g': 0.7}
+LEGACY_THRESHOLD_DEFAULTS = {'speed_kmh': 80, 'accel_ms2': 3, 'brake_ms2': 3.5,
+                              'roll_deg': 15, 'pitch_deg': 12, 'shock_g': 0.5}
+DEFAULTS = {'version': 1, 'threshold_policy': THRESHOLD_POLICY_VERSION,
+            **THRESHOLD_DEFAULTS, 'age_s': 10, 'position_std_m': 2,
+            'gap_s': 3, 'dwell_s': 2}
 LABELS = {'fix_degraded':'定位质量降级','heading_unavailable':'惯导 / 定向未就绪',
           'hardware_warning':'设备告警','diff_age':'差分延迟超限','position_std':'位置不确定度偏大',
           'overspeed':'速度超业务阈值','acceleration':'急加速候选','braking':'急减速候选',
           'roll':'横滚超业务阈值','pitch':'俯仰超业务阈值','shock':'合加速度冲击候选',
           'data_gap':'数据时间断档','out_of_order':'设备时间倒序','position_jump':'位置跳变候选'}
+
+# These are the only records that belong in the operational event views.  The
+# remaining conditions below are useful quality/status evidence, but they are
+# not threshold events and must stay in the data-quality view.
+THRESHOLD_EVENT_KINDS = ('overspeed', 'acceleration', 'braking', 'pitch', 'roll', 'shock')
+THRESHOLD_EVENT_FIELDS = {
+    'overspeed': ('speed',),
+    'acceleration': ('speed',),
+    'braking': ('speed',),
+    'pitch': ('pitch',),
+    'roll': ('roll',),
+    'shock': ('ax', 'ay', 'az'),
+}
+THRESHOLD_EVENT_META = {
+    'overspeed': {'group': '速度', 'unit': 'km/h', 'precision': 2},
+    'acceleration': {'group': '加速度', 'unit': 'm/s²', 'precision': 2},
+    'braking': {'group': '加速度', 'unit': 'm/s²', 'precision': 2},
+    'pitch': {'group': '姿态角', 'unit': '°', 'precision': 2},
+    'roll': {'group': '姿态角', 'unit': '°', 'precision': 2},
+    'shock': {'group': '振动', 'unit': 'g', 'precision': 3},
+}
+THRESHOLD_EVENT_GROUPS = {
+    'speed': ('overspeed',),
+    'acceleration': ('acceleration', 'braking'),
+    'attitude': ('pitch', 'roll'),
+    'vibration': ('shock',),
+}
 
 
 def distance(a, b):
@@ -46,23 +83,38 @@ def conditions(p, previous, baseline, rules, mount_confirmed):
             tolerance = max(20, 5 * std, 5 * (previous.get('lat_std') or 0), 5 * (previous.get('lon_std') or 0))
             if jump > (max(p['speed'] or 0, previous['speed'] or 0) + 15) * delta + tolerance and not p.get('stationary_context'):
                 add('position_jump', jump, tolerance)
-    # Business dynamics only with fused navigation and acceptable position quality.
-    qualified = p['valid_pos'] and p['nav_mode'] == 2 and std <= rules['position_std_m'] and p['speed'] is not None and not p.get('stationary_context')
-    if qualified and p['speed'] * 3.6 > rules['speed_kmh']:
-        add('overspeed', p['speed']*3.6, rules['speed_kmh'], 'warning', rules['dwell_s'])
-    if qualified and baseline and baseline['speed'] is not None and not baseline.get('stationary_context') and baseline['nav_mode'] == 2 and baseline['valid_pos'] and 'position_jump' not in out and max(baseline.get('lat_std') or 0,baseline.get('lon_std') or 0) <= rules['position_std_m']:
+    # Operational thresholds are field-local: quality.project() has already
+    # replaced an unreliable measurement with None.  Do not suppress a valid
+    # attitude/IMU exceedance because an unrelated position, heading or speed
+    # field is unavailable.
+    speed_qualified = p['speed'] is not None and not p.get('stationary_context')
+    if speed_qualified and p['speed'] * 3.6 > rules['speed_kmh']:
+        add('overspeed', p['speed']*3.6, rules['speed_kmh'])
+    if speed_qualified and baseline and baseline['speed'] is not None and not baseline.get('stationary_context'):
         delta = p['t'] - baseline['t']
         if 0.8 <= delta <= 2.5:
             accel = (p['speed'] - baseline['speed']) / delta
             if accel > rules['accel_ms2']:
-                add('acceleration', accel, rules['accel_ms2'], 'warning', 0.3)
+                add('acceleration', accel, rules['accel_ms2'])
             if -accel > rules['brake_ms2']:
-                add('braking', -accel, rules['brake_ms2'], 'warning', 0.3)
-    if qualified and mount_confirmed and p['speed'] > 2:
+                add('braking', -accel, rules['brake_ms2'])
+    if mount_confirmed:
         for key in ('roll','pitch'):
             if p[key] is not None and abs(p[key]) > rules[key+'_deg']:
-                add(key, abs(p[key]), rules[key+'_deg'], 'warning', rules['dwell_s'])
+                add(key, abs(p[key]), rules[key+'_deg'])
         shock = abs(math.sqrt(sum(p[k]**2 for k in ('ax','ay','az'))) - 1) if all(p[k] is not None for k in ('ax','ay','az')) else None
         if shock is not None and shock > rules['shock_g']:
-            add('shock', shock, rules['shock_g'], 'warning', 0.1)
+            add('shock', shock, rules['shock_g'])
     return out
+
+
+def threshold_conditions(p, previous, baseline, rules, mount_confirmed):
+    """Return only reliable-measurement threshold conditions.
+
+    ``conditions`` intentionally still exposes quality and readiness evidence
+    to diagnostic callers.  Operational event writers use this narrow view so
+    a data gap, device warning, or invalid navigation sample cannot become an
+    item in the threshold-event ledger.
+    """
+    signals = conditions(p, previous, baseline, rules, mount_confirmed)
+    return {kind: signals[kind] for kind in THRESHOLD_EVENT_KINDS if kind in signals}

@@ -51,8 +51,9 @@ class SpeedOutlierTests(unittest.TestCase):
             flush=True,
         )
         self.assertAlmostEqual(raw_spike['speed'], math.hypot(raw_spike['ve'], raw_spike['vn']), delta=.01)
-        # Four isolated frames are insufficient for the v8 causal warm-up.
-        self.assertIsNone(result['summary']['max_kmh'])
+        # Valid neighboring points keep their original GPCHCX.speed; both
+        # captured drift spikes are absent rather than clamped or zeroed.
+        self.assertAlmostEqual(result['summary']['max_kmh'], 1.8)
         self.assertIsNone(effective_spike['speed'])
         self.assertIsNone(effective_position_spike['speed'])
 

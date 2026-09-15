@@ -10,7 +10,7 @@ class MotionThresholdTests(unittest.TestCase):
     tearDown = fixtures.StoreTests.tearDown
     ingest = fixtures.StoreTests.ingest
 
-    def test_quiet_imu_does_not_turn_inconsistent_velocity_into_zero(self):
+    def test_static_noise_interval_zeroes_gpchcx_speed_and_anchors_drift(self):
         point = parse(fixtures.LIVE[0])
         tow = point['tow']
         anchor_lat, anchor_lon = point['lat'] + .00015, point['lon']
@@ -52,10 +52,13 @@ class MotionThresholdTests(unittest.TestCase):
             },
             flush=True,
         )
-        self.assertIsNone(result['summary']['max_kmh'])
+        self.assertEqual(result['summary']['max_kmh'], 0.0)
         self.assertEqual([item['motion_state'] for item in static_track],
-                         ['unknown', 'unknown', 'unknown'])
-        self.assertTrue(all(item['speed'] is None for item in static_track))
+                         ['stationary', 'stationary', 'stationary'])
+        self.assertTrue(all(item['speed'] == 0 for item in static_track))
+        self.assertTrue(all(abs(item['lat'] - anchor_lat) < 1e-10 for item in static_track))
+        self.assertTrue(all(item.get('position_source') == 'stationary_anchor'
+                            for item in static_track))
 
 
 if __name__ == '__main__':

@@ -1,8 +1,8 @@
 """Versioned, reversible measurement quarantine. Never mutates original points.
 
-v8 stores a causal, precision-gated ground-speed estimate separately from
-immutable navigation/IMU evidence. Low specific-force deviation alone never
-proves rest; invalid/unresolved navigation never becomes a fabricated zero.
+v10 projects only the device-reported GPCHCX.speed value. The current sample's
+three-axis vibration state can turn that value into a stationary zero; obvious
+navigation drift is quarantined instead of being clipped or reconstructed.
 """
 import argparse
 import collections
@@ -13,18 +13,16 @@ from pathlib import Path
 from statistics import median
 import time
 
-from .protocol import NUMERIC
+from .protocol import NUMERIC, is_valid_position
 from .rules import distance
 from . import ground_speed
 
-VERSION = 9
-# The 0.01 g signal remains available for IMU diagnostics. Operational motion
-# state now comes from the versioned ground_speed estimate, not this signal.
-MOTION_IMPACT_THRESHOLD_G = 0.01
-MOTION_STRATEGY = 'quality_gated_ground_speed'
+VERSION = 10
+MOTION_IMPACT_THRESHOLD_G = ground_speed.MOTION_IMPACT_THRESHOLD_G
+MOTION_STRATEGY = 'tri_axis_peak_deviation'
 # Frozen manifests from earlier releases are retained for audit only.  They
-# must never become the active filter after the v8 migration.
-COMPATIBLE_PROFILE_VERSIONS = (1, 2, 3, 4, 8, VERSION)
+# must never become the active filter after the v10 migration.
+COMPATIBLE_PROFILE_VERSIONS = (1, 2, 3, 4, 8, 9, VERSION)
 MAX_VALID_VEHICLE_SPEED_KMH = 130.0
 MAX_VALID_VEHICLE_SPEED_MS = MAX_VALID_VEHICLE_SPEED_KMH / 3.6
 # A ground vehicle can have a small vertical velocity, but a satellite-only
@@ -38,8 +36,8 @@ BACKFILL_BATCH_SIZE = 20_000
 AUTO_ENTRY_POLICY = {
     'strategy': MOTION_STRATEGY,
     'threshold_g': MOTION_IMPACT_THRESHOLD_G,
-    'stationary': '2 s qualified low velocity + quiet IMU',
-    'moving': '0.5 s significant qualified horizontal velocity',
+    'stationary': 'single-sample tri-axis resultant deviation <= 0.01 g',
+    'moving': 'single-sample tri-axis resultant deviation > 0.01 g',
 }
 # Stored as a numeric sentinel to keep the existing SQLite schema/index.  API
 # callers see ``end: null`` and ``active: true`` instead of a year-9999 date.
@@ -51,12 +49,11 @@ ALL_FIELDS = sum(BITS.values())
 
 def policy_description():
     """Return the human-readable policy shared by API and rollup responses."""
-    return (f'v{VERSION}：可信地速取 √(Ve²+Vn²)，V_2D 仅做同源一致性检查；'
-            '卫导/组合导航须通过速度标准差与连续性门控。持续 2 秒速度≤0.15 m/s、'
-            '水平速度标准差≤0.25 m/s、比力偏差≤0.01 g 且陀螺安静才判静止并归零；'
-            '初始化、纯惯导或异常解算留空；质量合格的低信噪比连续窗可显示独立参考地速，'
-            '参考值不判运动、不计最高速度/里程/告警，误差包络不是经标定的置信区间。'
-            '不从坐标漂移计算速度；原始字段和 IMU 留档。')
+    return (f'v{VERSION}：地速剖面只使用 GPCHCX.speed（V_2D）；'
+            f'三轴合成峰值偏差≤{MOTION_IMPACT_THRESHOLD_G:.2f} g 判静止并将派生地速置 0，'
+            f'>{MOTION_IMPACT_THRESHOLD_G:.2f} g 判运动并保留原始 speed。'
+            '明显位置跳变或导航速度解算失真置为缺测；不使用 Ve/Vn 合成、标准差门控、'
+            '短窗参考、平滑、插值、坐标差分或 IMU 积分估速。原始字段和 IMU 留档。')
 
 
 REASONS = {
@@ -66,12 +63,12 @@ REASONS = {
     'invalid_navigation': ('导航初始化 / 定位无效（保留显示）', 'status'),
     'heading_unavailable': ('定向未就绪（保留显示）', 'status'),
     'course_unavailable': ('静止或低速航迹角（保留显示）', 'status'),
-    # v8 retains stable reason names for the two field-level navigation
+    # v10 retains stable reason names for the two field-level navigation
     # quarantines; raw measurements remain untouched.
     'navigation_position_drift': ('显著位置漂移', 'anomaly'),
     'navigation_velocity_outlier': ('导航速度解算失真（速度 / 垂向速度 / 不确定度）', 'anomaly'),
     # Kept as stable reason names so older clients can still parse an audit
-    # record; v8 no longer emits these legacy stationary-fit reasons.
+    # record; v10 no longer emits these legacy stationary-fit reasons.
     'stationary_position': ('历史规则：静止定位偏差', 'legacy'),
     'position_uncertainty': ('历史规则：水平定位不确定度超限', 'legacy'),
     'stationary_altitude': ('历史规则：静止高程离群', 'legacy'),
@@ -81,7 +78,7 @@ REASONS = {
     'stationary_gyro': ('历史规则：静止角速度离群', 'legacy'),
     'stationary_accel': ('历史规则：静止比力离群', 'legacy'),
     'stationary_attitude': ('历史规则：静止姿态离群', 'legacy'),
-    'speed_unavailable': ('可信地速证据不足 / 预热 / 解算不可靠', 'unavailable'),
+    'speed_unavailable': ('非 GPCHCX、运动状态缺失或地速已隔离', 'unavailable'),
 }
 REASON_BITS = {key: 1 << i for i, key in enumerate(REASONS)}
 ANOMALY_BITS = sum(REASON_BITS[k] for k, (_, kind) in REASONS.items() if kind == 'anomaly')
@@ -139,7 +136,7 @@ def contexts(c, sn=None, include_legacy=False):
     for row in rows:
         item = dict(row, profile=json.loads(row['profile']))
         # v1-v4 stationary facts remain queryable by an explicit audit, but
-        # cannot affect the v8 operational projection.  This prevents the old
+        # cannot affect the v10 operational projection.  This prevents the old
         # open context from turning all later running coordinates into static
         # residuals after the threshold migration.
         current = (item['profile'].get('strategy') == MOTION_STRATEGY and
@@ -170,7 +167,7 @@ def context_for(p, scopes):
 
 
 def automatic_exit_policy(context):
-    """Return the v8 threshold policy for API compatibility."""
+    """Return the v10 vibration policy for API compatibility."""
     return dict(AUTO_EXIT_POLICY)
 
 
@@ -204,10 +201,7 @@ def tri_axis_peak_deviation(p):
 
 def motion_state(p):
     """Classify one sample using only the tri-axis peak-deviation threshold."""
-    deviation = tri_axis_peak_deviation(p)
-    if deviation is None:
-        return 'unknown'
-    return 'moving' if deviation > MOTION_IMPACT_THRESHOLD_G else 'stationary'
+    return ground_speed.motion_state(p)
 
 
 def navigation_position_drift(previous, current):
@@ -229,16 +223,26 @@ def navigation_position_drift(previous, current):
     jump = distance(current, previous)
     speed = max(previous.get('speed') or 0, current.get('speed') or 0)
     tolerance = max(20.0, 5 * (current.get('lat_std') or 0), 5 * (current.get('lon_std') or 0))
-    limit = (speed + 15.0) * delta + tolerance
-    if jump <= limit:
+    kinematic_limit = (speed + 15.0) * delta
+    limit = kinematic_limit + tolerance
+    speed_change = abs((current.get('speed') or 0) - (previous.get('speed') or 0))
+    # Large reported uncertainty alone should not hide ordinary static fixes.
+    # A sub-second point is nevertheless an obvious drift sample when both its
+    # coordinate step and its scalar-speed step exceed generous vehicle motion
+    # bounds. This rejects the captured 5.8 m / 0.1 s false solution without
+    # using coordinates to manufacture an alternate speed.
+    fast_inconsistent = (jump > kinematic_limit and
+                         speed_change > max(1.0, 10.0 * delta))
+    if jump <= limit and not fast_inconsistent:
         return None
     return dict(distance_m=jump, delta_s=delta, limit_m=limit,
                 previous_speed_ms=previous.get('speed'), current_speed_ms=current.get('speed'),
-                tolerance_m=tolerance)
+                speed_change_ms=speed_change, tolerance_m=tolerance,
+                fast_inconsistent=fast_inconsistent)
 
 
 class AutomaticStationaryEntryDetector:
-    """Deprecated v4 lifecycle hook; v8 never opens inferred contexts."""
+    """Deprecated lifecycle hook; v10 never opens inferred contexts."""
     def __init__(self):
         self.windows = {}
 
@@ -250,7 +254,7 @@ class AutomaticStationaryEntryDetector:
         # and historical decisions use motion_state() directly.
         return None
         # Legacy implementation retained below only for forensic source
-        # comparison; it is unreachable in v8.
+        # comparison; it is unreachable in v10.
         device_id = p['device_id']
         if context or p['t'] > time.time():
             self.forget(device_id)
@@ -323,7 +327,7 @@ class AutomaticStationaryEntryDetector:
 
 
 class ActiveStationaryExitDetector:
-    """Deprecated v4 lifecycle hook; v8 has no inferred exit lifecycle."""
+    """Deprecated lifecycle hook; v10 has no inferred exit lifecycle."""
     def __init__(self):
         self.candidates = {}
 
@@ -335,7 +339,7 @@ class ActiveStationaryExitDetector:
     def observe(self, p, context):
         return None
         # Legacy implementation retained below only for forensic source
-        # comparison; it is unreachable in v8.
+        # comparison; it is unreachable in v10.
         if not context or context.get('kind') != 'confirmed_stationary_active' or not context.get('active'):
             return None
         policy = automatic_exit_policy(context)
@@ -488,13 +492,11 @@ def assess(p, context=None, explain=False, previous=None):
                     max_vertical_speed_ms=MAX_VALID_VERTICAL_SPEED_MS,
                     max_velocity_std_ms=MAX_VALID_VELOCITY_STD_MS))
 
-    # Do not replace or hide coordinates merely because a sample is static,
-    # initialized, undirected, or low speed.  Only an impossible single-step
-    # jump or an internally inconsistent navigation solution is quarantined;
-    # this keeps normal running and accurate static GNSS positions available
-    # to the map and every parameter curve.
+    # A severe single-step position jump is a drift point, not an alternate
+    # source of vehicle speed. Quarantine its coordinate and GPCHCX.speed from
+    # operational curves/statistics while preserving every raw field.
     if drift:
-        reject('navigation_position_drift', ['lat', 'lon'], drift, drift['limit_m'])
+        reject('navigation_position_drift', ['lat', 'lon', 'speed'], drift, drift['limit_m'])
     return mask, reasons, details
 
 
@@ -515,14 +517,11 @@ def ground_speed_details(row):
     if estimate.get('value') is not None:
         return []
     labels = {
-        'missing_velocity_precision':'缺少完整速度标准差',
-        'navigation_unavailable':'导航未就绪或纯惯导不可确认',
-        'velocity_uncertain':'水平速度标准差超过 0.5 m/s',
-        'velocity_fields_disagree':'V_2D 与东/北向速度不一致',
-        'velocity_solution_outlier':'水平或垂向速度解算异常',
-        'motion_unresolved':'速度不足以区分低速运动与噪声，且未满足持续静止条件',
-        'warming_up':'尚未满足连续 0.5 秒可信运动证据',
-        'velocity_jump':'短窗水平速度向量跳变',
+        'non_gpchcx':'非 GPCHCX 报文不进入地速剖面',
+        'missing_speed':'GPCHCX.speed 缺失或无效',
+        'motion_unknown':'缺少三轴振动值，无法判定运动或静止',
+        'velocity_solution_outlier':'明显导航速度解算失真',
+        'navigation_drift':'明显导航漂移点已隔离',
     }
     return [dict(code='speed_unavailable', label=labels.get(estimate['reason'], '地速证据不足'),
                  category='unavailable', fields=['speed'], values={'speed':p.get('speed')},
@@ -533,10 +532,10 @@ def write_assessment(c, p, scopes, previous=None, estimator=None):
     context = context_for(p, scopes)
     mask, reasons, _ = assess(p, context, previous=previous)
     estimate = (estimator or seed_estimator(c, p)).observe(p)
-    # Field quarantine and the derived projection must never disagree: a
-    # stricter navigation-level gate cannot be resurrected by ground speed.
+    # Drift quarantine wins over the pointwise projection. Never turn a bad
+    # speed into zero: zero is reserved for vibration-classified stationary.
     if mask & BITS['speed']:
-        estimate.update(value=None, state='unknown', reason='velocity_solution_outlier')
+        estimate.update(value=None, state='unknown', reason='navigation_drift')
         estimate.pop('reference', None)
     if estimate['value'] is None:
         mask |= BITS['speed']
@@ -559,25 +558,22 @@ def project(row, info=False):
     fields = [k for k, bit in BITS.items() if mask & bit]
     for key in fields:
         p[key] = None
-    p['valid_pos'] = int(bool(p['valid_pos'] and p['lat'] is not None and p['lon'] is not None))
+    p['valid_pos'] = int(is_valid_position(p.get('fix_mode'), p.get('lat'), p.get('lon')))
     p['stationary_context'] = p.get('q_context') if not pending else None
     estimate = p.get('q_ground')
     estimate = json.loads(estimate) if isinstance(estimate, str) else estimate
     if pending or not estimate:
+        # Keep pending exports structurally compatible with the versioned CSV
+        # contract while still failing closed on the effective value.
         estimate = dict(value=None, state='unknown', reason='assessment_pending', sigma_ms=None,
-                        source='unavailable', window_s=0)
+                        source='GPCHCX.speed', window_s=0, method=ground_speed.METHOD)
+        if p.get('protocol') != 'GPCHCX':
+            estimate['reason'] = 'non_gpchcx'
     p['ground_speed'] = estimate
     p['motion_state'] = estimate['state']
-    # Vehicle speed follows the motion decision, not GNSS velocity residuals
-    # or displacement of retained static positions.  Normalize before any
-    # consumer (curves, rollups, replay, exports, or event rules) sees it.
-    # The input row and raw evidence remain untouched; unknown/pending motion
-    # must never be turned into a fabricated zero.
+    # This value is either the same row's raw GPCHCX.speed, a vibration-based
+    # stationary zero, or None. The input row and raw evidence remain intact.
     p['speed'] = estimate['value']
-    reference = (estimate.get('reference') or {}) if ground_speed.valid_reference(estimate) else {}
-    p['speed_reference'] = reference.get('value')
-    p['speed_reference_low'] = reference.get('lower_ms')
-    p['speed_reference_high'] = reference.get('upper_ms')
     if info:
         p['quality'] = dict(version=VERSION, pending=pending, excluded_fields=fields,
                             reasons=[dict(code=k,label=label,category=kind) for k,(label,kind) in REASONS.items() if reasons & REASON_BITS[k]],
@@ -622,7 +618,7 @@ def build_context(c, sn, start, end, provenance):
                    horizontal_limit_ms=max(limits[k] for k in ('speed','ve','vn')),
                    radial_median_m=radial_median,radial_mad_m=radial_mad,
                    population=count,valid_population=population,training_samples=len(radii),stride=stride,
-                   method='v8 tri-axis peak-deviation state plus navigation consistency quarantine; legacy fitted profile retained for audit only',
+                   method='v10 GPCHCX.speed with tri-axis stationary zero and obvious-drift quarantine',
                    strategy=MOTION_STRATEGY, motion_threshold_g=MOTION_IMPACT_THRESHOLD_G, version=VERSION)
     scope = dict(device_id=sn,start=start,end=end,kind='confirmed_stationary',profile=profile,provenance=provenance)
     scope['id'] = hashlib.sha256(json.dumps(scope,sort_keys=True).encode()).hexdigest()[:20]

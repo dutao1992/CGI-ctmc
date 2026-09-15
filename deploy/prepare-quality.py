@@ -11,9 +11,10 @@ import sys
 import time
 
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
-from vehicle import quality
+from vehicle import quality, event_projection
 from vehicle.store import Store, Connection
 from vehicle.aggregate import ROLLUP_LEVELS, ROLLUP_VERSION
+from vehicle.rules import THRESHOLD_EVENT_KINDS
 
 
 def install_scope(connection, scope):
@@ -40,6 +41,7 @@ def prepare(db, backup, context_paths):
         context_paths = [context_paths]
     scopes = [json.loads(Path(path).read_text()) for path in context_paths]
     store = Store(db)
+    policy_devices = event_projection.migrate_default_rules(store)
     # A code-only release must not create another full-size SQLite backup when
     # the immutable contexts and all quality decisions are already current.
     with store.connect() as c:
@@ -47,7 +49,9 @@ def prepare(db, backup, context_paths):
         installed_contexts = [dict(id=scope['id'],installed=install_scope(c,scope)) for scope in scopes]
         pending = c.execute('SELECT COUNT(*) FROM ('+quality.JOIN+' WHERE q.version IS NULL OR q.version!=? OR g.estimate IS NULL)',(quality.VERSION,)).fetchone()[0]
         c.rollback()
-    if not any(item['installed'] for item in installed_contexts) and not pending:
+    with store.connect() as c:
+        events_current = event_projection.is_current(c)
+    if not any(item['installed'] for item in installed_contexts) and not pending and events_current:
         return dict(version=quality.VERSION,skipped=True,reason='contexts_and_assessments_current',
                     contexts=installed_contexts,assessed=0,backup=None,finished_at=time.time())
     backup = Path(backup)
@@ -83,6 +87,9 @@ def prepare(db, backup, context_paths):
         print(json.dumps(dict(event,elapsed_s=round(time.time()-started,3))), flush=True)
 
     assessed = quality.backfill(store, progress=progress)
+    threshold_events = event_projection.rebuild(
+        store, progress=progress,
+        force=bool(assessed or policy_devices or any(item['installed'] for item in installed_contexts)))
     with store.connect() as c:
         after = raw_digest(c)
         if after != before:
@@ -93,6 +100,8 @@ def prepare(db, backup, context_paths):
         if pending:
             raise ValueError('仍有未判定采样')
     result = dict(version=quality.VERSION,backup=str(backup),contexts=installed_contexts,assessed=assessed,
+                  threshold_events=threshold_events,
+                  threshold_policy_devices=policy_devices,
                   raw_count=before[0],raw_sha256=before[1],raw_unchanged=True,
                   duration_s=round(time.time()-started,3),finished_at=time.time())
     store.meta('quality_migration',result)
@@ -128,7 +137,7 @@ def stage(source_db, db, backup, context_paths):
                     install_scope(c, scope)  # Existing contexts validate without writes.
                 pending = c.execute(quality.JOIN+' WHERE q.version IS NULL OR q.version!=? OR g.estimate IS NULL LIMIT 1',
                                     (quality.VERSION,)).fetchone()
-                if pending is None and Store._rollup_status(c)['ready']:
+                if pending is None and Store._rollup_status(c)['ready'] and event_projection.is_current(c):
                     return dict(skipped=True,reason='quality_and_rollups_current',version=quality.VERSION)
     copy_snapshot(source_db, db, progress=lambda *_: time.sleep(.01))
     print(json.dumps(dict(stage='prepare_snapshot')), flush=True)
@@ -160,6 +169,7 @@ def install_derived(db, prepared, restore=False, before_install=None):
         # Reserve only the writable main database, not the read-only ATTACH.
         # WAL readers (the old query API) remain available during verification.
         c.execute("UPDATE main.meta SET value=value WHERE key='query_cache_epoch'")
+        policy_devices = [] if restore else event_projection.migrate_default_rules_connection(c)
         print(json.dumps(dict(stage='verify_raw_before_cutover')), flush=True)
         with closing(sqlite3.connect('file:'+str(Path(prepared).resolve())+'?mode=ro',uri=True)) as source:
             expected = raw_digest(source)
@@ -193,6 +203,20 @@ def install_derived(db, prepared, restore=False, before_install=None):
         for table in ('point_quality', 'point_ground_speed', 'point_rollups'):
             c.execute(f'DELETE FROM {table}')
             c.execute(f'INSERT INTO {table} SELECT * FROM prepared.{table}')
+        event_floor = c.execute("SELECT MAX(COALESCE((SELECT MAX(id) FROM events),0),COALESCE(CAST((SELECT value FROM meta WHERE key='event_id_floor') AS INTEGER),0),COALESCE(CAST((SELECT value FROM prepared.meta WHERE key='event_id_floor') AS INTEGER),0))").fetchone()[0]
+        c.execute("INSERT OR REPLACE INTO meta(key,value) VALUES ('event_id_floor',?)", (str(event_floor),))
+        placeholders = ','.join('?' for _ in THRESHOLD_EVENT_KINDS)
+        c.execute(f'DELETE FROM events WHERE kind IN ({placeholders})', THRESHOLD_EVENT_KINDS)
+        c.execute(f'INSERT INTO events SELECT * FROM prepared.events WHERE kind IN ({placeholders})', THRESHOLD_EVENT_KINDS)
+        event_receipt = c.execute('SELECT value FROM prepared.meta WHERE key=?',
+                                  (event_projection.META_KEY,)).fetchone()
+        if not restore and not event_receipt:
+            raise ValueError('阈值事件预计算不完整')
+        if event_receipt:
+            c.execute('INSERT OR REPLACE INTO meta VALUES (?,?)',
+                      (event_projection.META_KEY, event_receipt[0]))
+        else:
+            c.execute('DELETE FROM meta WHERE key=?', (event_projection.META_KEY,))
         entry = c.execute("SELECT value FROM prepared.meta WHERE key='quality_migration'").fetchone()
         if restore:
             if entry:

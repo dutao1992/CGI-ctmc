@@ -9,3 +9,7 @@ integration/original/
 integration/local-before/
 integration/generated/
 *.tgz
+.playwright-cli/
+node_modules
+*.tsbuildinfo
+

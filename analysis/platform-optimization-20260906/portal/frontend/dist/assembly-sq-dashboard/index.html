@@ -1,0 +1,1432 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; connect-src 'self'">
+<title>装配工单 SQ 质检看板</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" integrity="sha384-vtjasyidUo0kW94K5MXDXntzOJpQgBKXmE7e2Ga4LG0skTTLeBi97eFAXsqewJjw" crossorigin="anonymous"></script>
+<style>
+  :root {
+    --bg: #0f1117;
+    --card: #1a1d27;
+    --card2: #20243a;
+    --border: #2e3250;
+    --accent1: #4f8ef7;
+    --accent2: #36d7b7;
+    --accent3: #f5a623;
+    --accent4: #e05c5c;
+    --green: #3ecf8e;
+    --red: #e05c5c;
+    --yellow: #f5a623;
+    --text: #e2e8f0;
+    --sub: #8892a4;
+    --d1-color: #4f8ef7;
+    --d5-color: #36d7b7;
+    --x2-color: #f5a623;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif; min-height: 100vh; }
+
+  /* ===== 顶部导航 ===== */
+  .header {
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 100;
+  }
+  .header-left { display: flex; align-items: center; gap: 16px; }
+  .logo { margin: 0; font-size: 18px; font-weight: 700; color: var(--accent1); letter-spacing: 1px; }
+  .header-meta { font-size: 12px; color: var(--sub); }
+  .header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 16px; }
+  .portal-back {
+    display: inline-flex; align-items: center; min-height: 32px; padding: 0 12px;
+    color: var(--text); text-decoration: none; font-size: 12px; font-weight: 600;
+    border: 1px solid var(--border); border-radius: 6px; background: rgba(255,255,255,.025);
+  }
+  .portal-back:hover, .portal-back:focus-visible { color: var(--accent1); border-color: var(--accent1); }
+  #dataSourceTag {
+    background: #1e2a3a; border: 1px solid var(--accent1);
+    color: var(--accent1); border-radius: 4px; padding: 2px 10px; font-size: 12px;
+  }
+
+  /* ===== 上传区域 ===== */
+  .upload-section {
+    padding: 14px 24px;
+    background: var(--card2);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  .upload-btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--accent1); color: #fff; border: none;
+    border-radius: 6px; padding: 8px 18px; font-size: 14px; cursor: pointer;
+    font-family: inherit; transition: opacity 0.2s;
+  }
+  .upload-btn:hover { opacity: 0.85; }
+  .upload-btn svg { flex-shrink: 0; }
+  #fileInput { display: none; }
+  .upload-hint { font-size: 12px; color: var(--sub); }
+  #statusMsg { font-size: 13px; color: var(--green); }
+
+  /* ===== 主内容 ===== */
+  .main { padding: 20px 24px; display: flex; flex-direction: column; gap: 20px; }
+
+  /* ===== 总览卡片 ===== */
+  .overview-row {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px;
+  }
+  .ov-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 18px; display: flex; flex-direction: column; gap: 6px;
+  }
+  .ov-label { font-size: 12px; color: var(--sub); }
+  .ov-value { font-size: 28px; font-weight: 700; }
+  .ov-sub { font-size: 12px; color: var(--sub); }
+  .c-blue { color: var(--accent1); } .c-green { color: var(--green); }
+  .c-yellow { color: var(--yellow); } .c-red { color: var(--red); }
+
+  /* ===== 制造中心板块 ===== */
+  .center-section {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    overflow: hidden;
+  }
+  .center-header {
+    padding: 14px 20px; display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+  }
+  .center-title {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 15px; font-weight: 700;
+  }
+  .center-dot { width: 10px; height: 10px; border-radius: 50%; }
+  .center-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 16px; }
+
+  /* KPI行 */
+  .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; }
+  .kpi-card {
+    background: var(--card2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px; text-align: center;
+  }
+  .kpi-val { font-size: 24px; font-weight: 700; }
+  .kpi-lbl { font-size: 11px; color: var(--sub); margin-top: 3px; }
+
+  /* 进度条 */
+  .prog-section { display: flex; flex-direction: column; gap: 10px; }
+  .prog-item { display: flex; flex-direction: column; gap: 4px; }
+  .prog-label { display: flex; justify-content: space-between; font-size: 12px; }
+  .prog-bar { height: 8px; background: #2a2d3e; border-radius: 4px; overflow: hidden; }
+  .prog-fill { height: 100%; border-radius: 4px; transition: width 0.6s ease; }
+
+  /* 图表双列 */
+  .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 768px) { .chart-row { grid-template-columns: 1fr; } }
+  .chart-box {
+    background: var(--card2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px; display: flex; flex-direction: column; gap: 8px;
+  }
+  .chart-title { font-size: 12px; color: var(--sub); font-weight: 600; letter-spacing: 0.5px; }
+  .chart-canvas-wrap { position: relative; height: 200px; }
+
+  /* 加工中心表格 */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th {
+    background: #1e2235; color: var(--sub); font-weight: 600;
+    padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border);
+  }
+  tbody tr { border-bottom: 1px solid #23263a; transition: background 0.15s; }
+  tbody tr:hover { background: #232640; }
+  tbody td { padding: 8px 12px; }
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    font-size: 11px; font-weight: 600;
+  }
+  .badge-green { background: rgba(62,207,142,0.15); color: var(--green); }
+  .badge-red { background: rgba(224,92,92,0.15); color: var(--red); }
+  .badge-yellow { background: rgba(245,166,35,0.15); color: var(--yellow); }
+
+  /* 加载蒙版 */
+  #loadingMask {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    z-index: 999; align-items: center; justify-content: center; flex-direction: column; gap: 12px;
+  }
+  #loadingMask.show { display: flex; }
+  .spinner {
+    width: 36px; height: 36px; border: 3px solid var(--border);
+    border-top-color: var(--accent1); border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* 未检预警标签 */
+  .warn-tag {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: rgba(224,92,92,0.12); border: 1px solid rgba(224,92,92,0.3);
+    color: var(--red); border-radius: 4px; padding: 3px 10px; font-size: 12px;
+  }
+
+  /* 完成率环形图颜色 */
+  .rate-good { color: var(--green); }
+  .rate-mid { color: var(--yellow); }
+  .rate-bad { color: var(--red); }
+
+  /* ===== 未专检列表面板 ===== */
+  .unchecked-panel {
+    background: var(--card); border: 1px solid rgba(224,92,92,0.4); border-radius: 12px;
+    overflow: hidden;
+  }
+  .unchecked-panel-header {
+    padding: 14px 20px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid rgba(224,92,92,0.25);
+    background: rgba(224,92,92,0.07);
+  }
+  .unchecked-panel-title {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 15px; font-weight: 700; color: var(--red);
+  }
+  .unchecked-count-badge {
+    background: rgba(224,92,92,0.18); color: var(--red);
+    border: 1px solid rgba(224,92,92,0.4);
+    border-radius: 20px; padding: 2px 12px; font-size: 13px; font-weight: 700;
+  }
+  .unchecked-filter-row {
+    padding: 12px 20px; display: flex; gap: 8px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+  }
+  .filter-btn {
+    background: var(--card2); border: 1px solid var(--border);
+    color: var(--sub); border-radius: 6px; padding: 5px 14px;
+    font-size: 12px; cursor: pointer; font-family: inherit; transition: all 0.2s;
+  }
+  .filter-btn:hover { border-color: var(--accent1); color: var(--accent1); }
+  .filter-btn.active { background: rgba(79,142,247,0.15); border-color: var(--accent1); color: var(--accent1); }
+  .unchecked-search {
+    background: var(--card2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 5px 12px; font-size: 12px; font-family: inherit;
+    outline: none; min-width: 200px;
+  }
+  .unchecked-search:focus { border-color: var(--accent1); box-shadow: 0 0 0 3px rgba(79,142,247,.18); }
+  .unchecked-table-wrap { overflow-x: auto; }
+  .unchecked-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .unchecked-table thead th {
+    background: #1e2235; color: var(--sub); font-weight: 600;
+    padding: 8px 14px; text-align: left; border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .unchecked-table tbody tr { border-bottom: 1px solid #23263a; transition: background 0.15s; }
+  .unchecked-table tbody tr:hover { background: #2a1f2e; }
+  .unchecked-table tbody td { padding: 9px 14px; }
+  .row-idx { color: var(--sub); font-size: 11px; }
+  .order-no { font-family: 'Consolas', monospace; color: var(--accent1); font-size: 12px; font-weight: 600; }
+  .mat-no { font-family: 'Consolas', monospace; color: var(--accent2); font-size: 12px; }
+  .mat-desc { color: var(--text); max-width: 200px; }
+  .center-tag { font-size: 11px; color: var(--sub); }
+  .status-done {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: rgba(224,92,92,0.1); color: var(--red);
+    border: 1px solid rgba(224,92,92,0.3); border-radius: 4px;
+    padding: 2px 8px; font-size: 11px; font-weight: 600;
+  }
+  .unchecked-empty {
+    padding: 32px; text-align: center; color: var(--sub); font-size: 14px;
+  }
+  .unchecked-footer {
+    padding: 10px 20px; border-top: 1px solid var(--border);
+    font-size: 12px; color: var(--sub); display: flex; justify-content: space-between; align-items: center;
+  }
+  /* 导出按钮 */
+  .export-dropdown { position: relative; display: inline-block; }
+  .export-btn {
+    background: rgba(62,207,142,0.12); border: 1px solid rgba(62,207,142,0.35);
+    color: var(--green); border-radius: 6px; padding: 5px 14px;
+    font-size: 12px; cursor: pointer; font-family: inherit; font-weight: 600;
+    display: inline-flex; align-items: center; gap: 5px; transition: all 0.2s;
+  }
+  .export-btn:hover { background: rgba(62,207,142,0.22); border-color: var(--green); }
+  .export-menu {
+    display: none; position: absolute; top: calc(100% + 4px); right: 0;
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    padding: 4px; min-width: 140px; z-index: 50;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  }
+  .export-menu.show { display: block; }
+  .export-menu-item {
+    display: block; width: 100%; text-align: left;
+    background: none; border: none; color: var(--text);
+    padding: 7px 12px; font-size: 12px; cursor: pointer;
+    border-radius: 5px; font-family: inherit; transition: background 0.15s;
+  }
+  .export-menu-item:hover { background: rgba(79,142,247,0.12); color: var(--accent1); }
+
+  /* ===== 已检生产订单列表面板（绿色主题） ===== */
+  .checked-panel {
+    background: var(--card); border: 1px solid rgba(62,207,142,0.4); border-radius: 12px;
+    overflow: hidden; margin-top: 20px;
+  }
+  .checked-panel-header {
+    padding: 14px 20px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid rgba(62,207,142,0.25);
+    background: rgba(62,207,142,0.07);
+  }
+  .checked-panel-title {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 15px; font-weight: 700; color: var(--green);
+  }
+  .checked-count-badge {
+    background: rgba(62,207,142,0.18); color: var(--green);
+    border: 1px solid rgba(62,207,142,0.4);
+    border-radius: 20px; padding: 2px 12px; font-size: 13px; font-weight: 700;
+  }
+  .checked-filter-row {
+    padding: 12px 20px; display: flex; gap: 8px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+  }
+  .checked-search {
+    background: var(--card2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 5px 12px; font-size: 12px; font-family: inherit;
+    outline: none; min-width: 200px;
+  }
+  .checked-search:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(62,207,142,.18); }
+  .checked-table-wrap { overflow-x: auto; }
+  .checked-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .checked-table thead th {
+    background: #1e2235; color: var(--sub); font-weight: 600;
+    padding: 8px 14px; text-align: left; border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .checked-table tbody tr { border-bottom: 1px solid #23263a; transition: background 0.15s; }
+  .checked-table tbody tr:hover { background: #1a2e24; }
+  .checked-table tbody td { padding: 9px 14px; }
+  .status-self {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: rgba(79,142,247,0.1); color: var(--accent1);
+    border: 1px solid rgba(79,142,247,0.3); border-radius: 4px;
+    padding: 2px 8px; font-size: 11px; font-weight: 600;
+  }
+  .status-qc {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: rgba(245,166,35,0.1); color: var(--yellow);
+    border: 1px solid rgba(245,166,35,0.3); border-radius: 4px;
+    padding: 2px 8px; font-size: 11px; font-weight: 600;
+  }
+  .status-both {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: rgba(62,207,142,0.1); color: var(--green);
+    border: 1px solid rgba(62,207,142,0.3); border-radius: 4px;
+    padding: 2px 8px; font-size: 11px; font-weight: 600;
+  }
+  .checked-empty {
+    padding: 32px; text-align: center; color: var(--sub); font-size: 14px;
+  }
+  .checked-footer {
+    padding: 10px 20px; border-top: 1px solid var(--border);
+    font-size: 12px; color: var(--sub); display: flex; justify-content: space-between; align-items: center;
+  }
+  /* 已检导出按钮：蓝色主题区分 */
+  .export-btn-checked {
+    background: rgba(79,142,247,0.12); border: 1px solid rgba(79,142,247,0.35);
+    color: var(--accent1); border-radius: 6px; padding: 5px 14px;
+    font-size: 12px; cursor: pointer; font-family: inherit; font-weight: 600;
+    display: inline-flex; align-items: center; gap: 5px; transition: all 0.2s;
+  }
+  .export-btn-checked:hover { background: rgba(79,142,247,0.22); border-color: var(--accent1); }
+
+  /* ===== 紧凑导航与分页 ===== */
+  .dashboard-nav {
+    position: sticky; top: 65px; z-index: 90;
+    display: flex; align-items: center; gap: 8px; overflow-x: auto;
+    padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px;
+    background: rgba(26,29,39,.96); backdrop-filter: blur(12px);
+  }
+  .dashboard-nav { scrollbar-width: thin; scrollbar-color: var(--accent1) transparent; }
+  button:focus-visible, a:focus-visible, input:focus-visible {
+    outline: 2px solid #8bb6ff; outline-offset: 2px;
+  }
+  .dashboard-nav strong { margin-right: 4px; color: var(--sub); font-size: 12px; white-space: nowrap; }
+  .dashboard-nav button {
+    flex: 0 0 auto; min-height: 34px; padding: 0 14px;
+    border: 1px solid var(--border); border-radius: 7px;
+    background: var(--card2); color: var(--sub); cursor: pointer; font: inherit; font-size: 12px; font-weight: 700;
+  }
+  .dashboard-nav button:hover, .dashboard-nav button.active { border-color: var(--accent1); color: #fff; background: rgba(79,142,247,.18); }
+  .center-pane { display: none; }
+  .center-pane.active { display: block; }
+  .table-pagination { display: inline-flex; align-items: center; gap: 8px; }
+  .page-btn {
+    min-height: 30px; padding: 0 11px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--card2); color: var(--text); cursor: pointer; font: inherit; font-size: 12px;
+  }
+  .page-btn:disabled { cursor: default; opacity: .4; }
+  .page-indicator { min-width: 72px; text-align: center; color: var(--sub); }
+
+  @media (max-width: 720px) {
+    .header { align-items: flex-start; gap: 10px; padding: 11px 14px; }
+    .header-left { align-items: flex-start; flex-direction: column; gap: 5px; }
+    .logo { font-size: 15px; }
+    .header-actions { align-items: flex-end; flex-direction: column; gap: 5px; }
+    .header-meta { text-align: right; }
+    .upload-section { padding: 10px 14px; gap: 8px; }
+    .upload-hint { display: none; }
+    .main { padding: 14px; gap: 14px; }
+    .overview-row { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
+    .ov-card { min-width: 0; padding: 12px; }
+    .ov-value { font-size: 23px; }
+    .ov-card:last-child { grid-column: 1 / -1; }
+    .dashboard-nav { top: 61px; margin: 0 -2px; }
+    .center-header, .unchecked-panel-header, .checked-panel-header { align-items: flex-start; flex-direction: column; gap: 10px; padding: 12px; }
+    .center-title, .unchecked-panel-title, .checked-panel-title { flex-wrap: wrap; }
+    .center-body { padding: 12px; }
+    .kpi-row { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
+    .kpi-card { padding: 10px 8px; }
+    .kpi-val { font-size: 20px; }
+    .chart-canvas-wrap { height: 180px; }
+    .unchecked-filter-row, .checked-filter-row { position: sticky; top: 112px; z-index: 8; padding: 10px 12px; background: var(--card); }
+    .unchecked-search, .checked-search { order: -1; width: 100%; min-width: 0; min-height: 36px; }
+    .unchecked-footer, .checked-footer { align-items: flex-start; flex-direction: column; gap: 9px; padding: 10px 12px; }
+    .table-pagination { width: 100%; justify-content: space-between; }
+    button, .portal-back, .filter-btn, .page-btn, .export-btn, .export-btn-checked { min-height: 44px; }
+    .dashboard-nav button { min-height: 44px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  }
+
+</style>
+</head>
+<body>
+
+<!-- 加载蒙版 -->
+<div id="loadingMask">
+  <div class="spinner"></div>
+  <span style="color:var(--text);font-size:14px;">正在解析数据...</span>
+</div>
+
+<!-- 顶部导航 -->
+<div class="header">
+  <div class="header-left">
+    <h1 class="logo">📋 装配工单 SQ 质检看板</h1>
+    <span id="dataSourceTag">默认数据</span>
+  </div>
+  <div class="header-actions">
+    <a class="portal-back" href="/">← 返回质检平台</a>
+    <div class="header-meta" id="headerMeta">数据日期：--</div>
+  </div>
+</div>
+
+<!-- 上传区域 -->
+<div class="upload-section">
+  <button class="upload-btn" onclick="document.getElementById('fileInput').click()">
+    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+    </svg>
+    上传 Excel 文件
+  </button>
+  <input type="file" id="fileInput" accept=".xlsx,.xls" onchange="handleFileUpload(event)">
+  <span class="upload-hint">支持 .xlsx / .xls 格式，字段需与标准模板一致</span>
+  <span id="statusMsg"></span>
+</div>
+
+<!-- 主内容 -->
+<div class="main" id="mainContent">
+  <!-- 总览 -->
+  <div class="overview-row" id="overviewRow"></div>
+  <nav class="dashboard-nav" aria-label="看板内容导航">
+    <strong>制造中心</strong>
+    <button class="active" data-center-target="centerD1" type="button">D1 精密</button>
+    <button data-center-target="centerD5" type="button">D5 鑫乘</button>
+    <button data-center-target="centerX2" type="button">X2 总装</button>
+    <button type="button" onclick="document.getElementById('uncheckedPanel').scrollIntoView({behavior:'smooth'})">未检清单</button>
+    <button type="button" onclick="document.getElementById('checkedPanel').scrollIntoView({behavior:'smooth'})">已检清单</button>
+  </nav>
+  <!-- 三个制造中心 -->
+  <div id="centerD1" class="center-pane active"></div>
+  <div id="centerD5" class="center-pane"></div>
+  <div id="centerX2" class="center-pane"></div>
+
+  <!-- ===== 未专检生产订单列表 ===== -->
+  <div id="uncheckedPanel"></div>
+
+  <!-- ===== 已检生产订单列表 ===== -->
+  <div id="checkedPanel"></div>
+
+</div>
+
+<script src="./dashboard-utils.js"></script>
+<script>
+// ===================== 数据处理核心 =====================
+const COL = {
+  workCenter: '工作中心',
+  machCenter: '加工中心',
+  machDesc: '加工中心描述',
+  selfInsp: '自检员',   // AL列 — 自检完成判据
+  qcInsp: '专检员',     // AN列 — 专检完成判据
+  planQty: '工序数量',
+  reportQty: '报工数量',
+  defectQty: '废品数',
+  auditQty: '审核数量',
+  passQty: '合格+让步',
+  process: '工序短文本',
+  status: '加工状态',
+  material: '物料描述',
+  priority: '优先级',
+  orderNo: '工单编号',
+  date: '结束时间',
+  startUser: '开始用户',
+  endUser: '结束用户',
+  selfDate: '自检日期',
+  qcDate: '专检日期',
+};
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+const MAX_UPLOAD_ROWS = 20000;
+const MAX_UPLOAD_COLUMNS = 100;
+const { escapeHtml, normalizeRows, inspectionTaskRate } = window.AssemblyDashboardUtils;
+
+// 判断是否属于总装 X2
+function isX2(wc) {
+  if (!wc) return false;
+  return /^X2([A-Za-z]\d{2})?$/.test(wc.trim());
+}
+
+// 有效检验记录判断：格式为 4位数字-姓名（如 1234-检验员）或 ADMIN_MES-系统管理员
+const VALID_INSP_RE = /^(?:\d{4}|ADMIN_MES)-.+/;
+function hasValidInsp(v) {
+  return v !== null && v !== undefined && VALID_INSP_RE.test(v.toString().trim());
+}
+// 判断是否完成自检（自检员有 "4位数字-姓名" 或 "ADMIN_MES-MES系统管理员" 格式记录）
+function selfDone(row) {
+  return hasValidInsp(row[COL.selfInsp]);
+}
+// 判断是否完成专检（专检员有 "4位数字-姓名" 或 "ADMIN_MES-MES系统管理员" 格式记录）
+function qcDone(row) {
+  return hasValidInsp(row[COL.qcInsp]);
+}
+
+function filterData(data) {
+  return data.filter(r => {
+    const wc = r[COL.workCenter];
+    if (!wc) return false;
+    return wc === 'D1' || wc === 'D5' || isX2(wc);
+  });
+}
+
+function classifyCenter(wc) {
+  if (wc === 'D1') return 'D1';
+  if (wc === 'D5') return 'D5';
+  if (isX2(wc)) return 'X2';
+  return null;
+}
+
+function computeStats(rows) {
+  const total = rows.length;
+  // 以报工数量为计量基础
+  let selfQty = 0, qcQty = 0, neitherQty = 0;
+  let planQty = 0, reportQty = 0, defectQty = 0, auditQty = 0;
+  // 行数维度（用于表格展示条目数）
+  let selfCount = 0, qcCount = 0, neitherCount = 0;
+  const machMap = {};
+
+  rows.forEach(r => {
+    const sd = selfDone(r);
+    const qd = qcDone(r);
+    const rq = toNum(r[COL.reportQty]);
+    if (sd) { selfQty += rq; selfCount++; }
+    if (qd) { qcQty += rq; qcCount++; }
+    if (!sd && !qd) { neitherQty += rq; neitherCount++; }
+    planQty += toNum(r[COL.planQty]);
+    reportQty += rq;
+    defectQty += toNum(r[COL.defectQty]);
+    auditQty += toNum(r[COL.auditQty]);
+
+    const mc = r[COL.machCenter] || '未知';
+    const desc = r[COL.machDesc] || mc;
+    if (!machMap[mc]) machMap[mc] = { id: mc, desc, count: 0, selfD: 0, qcD: 0, selfQty: 0, qcQty: 0, planQty: 0, reportQty: 0, defectQty: 0 };
+    machMap[mc].count++;
+    if (sd) { machMap[mc].selfD++; machMap[mc].selfQty += rq; }
+    if (qd) { machMap[mc].qcD++; machMap[mc].qcQty += rq; }
+    machMap[mc].planQty += toNum(r[COL.planQty]);
+    machMap[mc].reportQty += rq;
+    machMap[mc].defectQty += toNum(r[COL.defectQty]);
+  });
+
+  const machList = Object.values(machMap).sort((a, b) => b.count - a.count);
+  return {
+    total, selfCount, qcCount, neitherCount,
+    selfQty, qcQty, neitherQty,
+    planQty, reportQty, defectQty, auditQty,
+    machList
+  };
+}
+
+function toNum(v) {
+  if (v === null || v === undefined || v === '') return 0;
+  const n = parseFloat(v);
+  return isNaN(n) ? 0 : n;
+}
+
+function pct(a, b) { return b === 0 ? 0 : Math.round(a / b * 100); }
+
+// ===================== 渲染函数 =====================
+const chartInstances = {};
+const TABLE_PAGE_SIZE = 25;
+
+function activateCenter(centerId) {
+  document.querySelectorAll('.center-pane').forEach(pane => pane.classList.toggle('active', pane.id === centerId));
+  document.querySelectorAll('[data-center-target]').forEach(button => {
+    const active = button.dataset.centerTarget === centerId;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+  requestAnimationFrame(() => Object.values(chartInstances).forEach(chart => chart.resize()));
+}
+
+document.querySelectorAll('[data-center-target]').forEach(button => {
+  button.addEventListener('click', () => activateCenter(button.dataset.centerTarget));
+});
+
+function destroyChart(id) {
+  if (chartInstances[id]) { chartInstances[id].destroy(); delete chartInstances[id]; }
+}
+
+function renderOverview(allRows, date) {
+  const d1 = allRows.filter(r => r[COL.workCenter] === 'D1');
+  const d5 = allRows.filter(r => r[COL.workCenter] === 'D5');
+  const x2 = allRows.filter(r => isX2(r[COL.workCenter]));
+
+  const total = allRows.length;
+  // 报工数量维度
+  const totalRptQty = allRows.reduce((s, r) => s + toNum(r[COL.reportQty]), 0);
+  const selfRptQty  = allRows.filter(selfDone).reduce((s, r) => s + toNum(r[COL.reportQty]), 0);
+  const qcRptQty    = allRows.filter(qcDone).reduce((s, r) => s + toNum(r[COL.reportQty]), 0);
+  const neitherRptQty = allRows.filter(r => !selfDone(r) && !qcDone(r)).reduce((s, r) => s + toNum(r[COL.reportQty]), 0);
+  const neitherCount  = allRows.filter(r => !selfDone(r) && !qcDone(r)).length;
+
+  document.getElementById('overviewRow').innerHTML = `
+    <div class="ov-card">
+      <div class="ov-label">总工单数</div>
+      <div class="ov-value c-blue">${total}</div>
+      <div class="ov-sub">精密${d1.length} · 鑫乘${d5.length} · 总装${x2.length}</div>
+    </div>
+    <div class="ov-card">
+      <div class="ov-label">自检完成率</div>
+      <div class="ov-value ${selfRptQty/totalRptQty>=0.9?'c-green':selfRptQty/totalRptQty>=0.7?'c-yellow':'c-red'}">${pct(selfRptQty,totalRptQty)}%</div>
+      <div class="ov-sub">报工数 ${selfRptQty} / ${totalRptQty}</div>
+    </div>
+    <div class="ov-card">
+      <div class="ov-label">专检完成率</div>
+      <div class="ov-value ${qcRptQty/totalRptQty>=0.9?'c-green':qcRptQty/totalRptQty>=0.7?'c-yellow':'c-red'}">${pct(qcRptQty,totalRptQty)}%</div>
+      <div class="ov-sub">报工数 ${qcRptQty} / ${totalRptQty}</div>
+    </div>
+    <div class="ov-card">
+      <div class="ov-label">总报工数量</div>
+      <div class="ov-value c-blue">${totalRptQty}</div>
+      <div class="ov-sub">自检+专检 = ${selfRptQty+qcRptQty}</div>
+    </div>
+    <div class="ov-card">
+      <div class="ov-label">未检报工数量</div>
+      <div class="ov-value ${neitherRptQty>0?'c-red':'c-green'}">${neitherRptQty}</div>
+      <div class="ov-sub">未检工单 ${neitherCount} 条</div>
+    </div>
+    <div class="ov-card">
+      <div class="ov-label">数据日期</div>
+      <div class="ov-value" style="font-size:18px;color:var(--sub)">${escapeHtml(date)}</div>
+      <div class="ov-sub">工单数据快照</div>
+    </div>
+  `;
+}
+
+function renderCenter(rows, cenId, cenName, color, dotColor) {
+  const st = computeStats(rows);
+  // 自检/专检完成率 = 有记录行的报工数 / 总报工数
+  const selfRate = pct(st.selfQty, st.reportQty);
+  const qcRate   = pct(st.qcQty,   st.reportQty);
+  const inspectionTaskTotal = st.reportQty * 2;
+  const doneRate = inspectionTaskRate(st.selfQty, st.qcQty, st.reportQty);
+  const defectRate = st.planQty > 0 ? (st.defectQty / st.planQty * 100).toFixed(2) : '0.00';
+
+  const rateColor = r => r >= 90 ? 'var(--green)' : r >= 70 ? 'var(--yellow)' : 'var(--red)';
+
+  // 生成加工中心表格行
+  const tableRows = st.machList.map(m => {
+    const sr = pct(m.selfQty, m.reportQty);
+    const qr = pct(m.qcQty, m.reportQty);
+    const dr = m.planQty > 0 ? (m.defectQty / m.planQty * 100).toFixed(1) : '0.0';
+    const selfBadge = sr === 100 ? `<span class="badge badge-green">✓ 100%</span>` : sr >= 50 ? `<span class="badge badge-yellow">${sr}%</span>` : `<span class="badge badge-red">⚠ ${sr}%</span>`;
+    const qcBadge = qr === 100 ? `<span class="badge badge-green">✓ 100%</span>` : qr >= 50 ? `<span class="badge badge-yellow">${qr}%</span>` : `<span class="badge badge-red">⚠ ${qr}%</span>`;
+    return `<tr>
+      <td><b>${escapeHtml(m.id)}</b></td>
+      <td style="color:var(--sub);font-size:12px">${escapeHtml(m.desc)}</td>
+      <td>${m.count}</td>
+      <td>${selfBadge}</td>
+      <td>${qcBadge}</td>
+      <td>${m.reportQty}</td>
+      <td style="color:${parseFloat(dr)>1?'var(--red)':'var(--green)'}">${dr}%</td>
+    </tr>`;
+  }).join('');
+
+  const warnTag = st.neitherCount > 0
+    ? `<span class="warn-tag">⚠ ${st.neitherCount} 条未检</span>` : '';
+
+  document.getElementById(cenId).innerHTML = `
+    <div class="center-section">
+      <div class="center-header">
+        <div class="center-title">
+          <div class="center-dot" style="background:${dotColor}"></div>
+          <span style="color:${color}">${cenName}</span>
+          <span style="font-size:13px;color:var(--sub);font-weight:400;">共 ${st.total} 条工单</span>
+          ${warnTag}
+        </div>
+      </div>
+      <div class="center-body">
+        <!-- KPI -->
+        <div class="kpi-row">
+          <div class="kpi-card">
+            <div class="kpi-val" style="color:${rateColor(selfRate)}">${selfRate}%</div>
+            <div class="kpi-lbl">自检完成率</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" style="color:${rateColor(qcRate)}">${qcRate}%</div>
+            <div class="kpi-lbl">专检完成率</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" style="color:${rateColor(doneRate)}">${doneRate}%</div>
+            <div class="kpi-lbl">检验任务完成率</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" style="color:${st.neitherCount>0?'var(--red)':'var(--green)'}">${st.neitherCount}</div>
+            <div class="kpi-lbl">未检工单数</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" style="color:var(--text)">${st.planQty}</div>
+            <div class="kpi-lbl">计划工序数量</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" style="color:var(--text)">${st.reportQty}</div>
+            <div class="kpi-lbl">报工数量</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" style="color:${st.defectQty>0?'var(--red)':'var(--green)'}">${st.defectQty}</div>
+            <div class="kpi-lbl">废品数</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" style="color:${parseFloat(defectRate)>1?'var(--red)':'var(--green)'}">${defectRate}%</div>
+            <div class="kpi-lbl">废品率</div>
+          </div>
+        </div>
+
+        <!-- 进度条 -->
+        <div class="prog-section">
+          <div class="prog-item">
+            <div class="prog-label"><span>自检完成（报工数 ${st.selfQty} / ${st.reportQty}）</span><span style="color:${rateColor(selfRate)}">${selfRate}%</span></div>
+            <div class="prog-bar"><div class="prog-fill" style="width:${selfRate}%;background:${rateColor(selfRate)}"></div></div>
+          </div>
+          <div class="prog-item">
+            <div class="prog-label"><span>专检完成（报工数 ${st.qcQty} / ${st.reportQty}）</span><span style="color:${rateColor(qcRate)}">${qcRate}%</span></div>
+            <div class="prog-bar"><div class="prog-fill" style="width:${qcRate}%;background:${rateColor(qcRate)}"></div></div>
+          </div>
+          <div class="prog-item">
+            <div class="prog-label"><span>检验任务完成（自检+专检 ${st.selfQty + st.qcQty} / ${inspectionTaskTotal}）</span><span style="color:${rateColor(doneRate)}">${doneRate}%</span></div>
+            <div class="prog-bar"><div class="prog-fill" style="width:${doneRate}%;background:${rateColor(doneRate)}"></div></div>
+          </div>
+        </div>
+
+        <!-- 图表 -->
+        <div class="chart-row">
+          <div class="chart-box">
+            <div class="chart-title">加工中心工单分布</div>
+            <div class="chart-canvas-wrap"><canvas id="chart_bar_${cenId}" role="img" aria-label="${cenName}加工中心工单与报工数量分布"></canvas></div>
+          </div>
+          <div class="chart-box">
+            <div class="chart-title">自检 / 专检完成状态分布</div>
+            <div class="chart-canvas-wrap"><canvas id="chart_pie_${cenId}" role="img" aria-label="${cenName}自检专检完成状态分布"></canvas></div>
+          </div>
+        </div>
+
+        <!-- 加工中心明细表 -->
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>加工中心</th><th>描述</th><th>工单数</th>
+                <th>自检完成率</th><th>专检完成率</th>
+                <th>报工数量</th><th>废品率</th>
+              </tr>
+            </thead>
+            <tbody>${tableRows}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // 渲染柱状图
+  destroyChart('bar_' + cenId);
+  const barCtx = document.getElementById('chart_bar_' + cenId).getContext('2d');
+  const topN = st.machList.slice(0, Math.min(10, st.machList.length));
+  chartInstances['bar_' + cenId] = new Chart(barCtx, {
+    type: 'bar',
+    data: {
+      labels: topN.map(m => m.id),
+      datasets: [
+        { label: '工单数', data: topN.map(m => m.count), backgroundColor: color + 'cc', borderRadius: 4 },
+        { label: '报工数', data: topN.map(m => m.reportQty), backgroundColor: '#8892a4' + '88', borderRadius: 4 },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#8892a4', font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: '#8892a4', font: { size: 10 } }, grid: { color: '#2e3250' } },
+        y: { ticks: { color: '#8892a4', font: { size: 10 } }, grid: { color: '#2e3250' } }
+      }
+    }
+  });
+
+  // 渲染饼图（自检/专检/未检状态）
+  destroyChart('pie_' + cenId);
+  const pieCtx = document.getElementById('chart_pie_' + cenId).getContext('2d');
+  chartInstances['pie_' + cenId] = new Chart(pieCtx, {
+    type: 'doughnut',
+    data: {
+      labels: ['已自检（报工数）', '已专检（报工数）', '未检（报工数）'],
+      datasets: [{
+        data: [st.selfQty, st.qcQty, st.neitherQty],
+        backgroundColor: ['#4f8ef7', '#36d7b7', '#e05c5c'],
+        borderWidth: 1, borderColor: '#1a1d27'
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      cutout: '60%',
+      plugins: {
+        legend: { position: 'right', labels: { color: '#8892a4', font: { size: 11 }, boxWidth: 12 } }
+      }
+    }
+  });
+}
+
+
+// ===================== 未专检列表面板 =====================
+let _uncheckedAllRows = [];
+let _uncheckedFilter = 'all';
+let _uncheckedKeyword = '';
+let _uncheckedPage = 1;
+
+function renderUncheckedPanel(allRows) {
+  // 筛选：自检员 AND 专检员同时为空（两字段均无有效"4位数字-姓名"记录）才算未检
+  // 任意一个字段有效则视为已检，不纳入列表
+  const VALID_RE = /^(?:\d{4}|ADMIN_MES)-.+/;
+  const hasValid = v => v && VALID_RE.test(v.toString().trim());
+  const notQC = allRows.filter(r => {
+    const selfV = r[COL.selfInsp];
+    const qcV   = r[COL.qcInsp];
+    return !hasValid(selfV) && !hasValid(qcV);
+  });
+
+  // 去重（同生产订单+物料号 只显示一条）
+  const seen = new Set();
+  const deduped = [];
+  notQC.forEach(r => {
+    const k = (r['生产订单'] || '') + '|' + (r[COL.material] || '') + '|' + (r['物料号'] || '');
+    if (!seen.has(k)) { seen.add(k); deduped.push(r); }
+  });
+
+  _uncheckedAllRows = deduped;
+  _uncheckedFilter = 'all';
+  _uncheckedKeyword = '';
+  _uncheckedPage = 1;
+  _renderUncheckedTable();
+}
+
+function _getCenter(row) {
+  const wc = row[COL.workCenter] || '';
+  if (wc === 'D1') return 'D1精密';
+  if (wc === 'D5') return 'D5鑫乘';
+  if (/^X2/.test(wc)) return 'X2总装';
+  return wc;
+}
+
+// ===================== 导出未检清单为Excel =====================
+function _exportUncheckedExcel(scope) {
+  if (!_uncheckedAllRows || _uncheckedAllRows.length === 0) {
+    alert('暂无未检记录可导出'); return;
+  }
+  let rows = _uncheckedAllRows;
+  const labelMap = { all: '全部', D1: 'D1精密', D5: 'D5鑫乘', X2: 'X2总装' };
+  const label = labelMap[scope] || '全部';
+
+  // 按制造中心筛选
+  if (scope === 'D1') rows = rows.filter(r => r[COL.workCenter] === 'D1');
+  else if (scope === 'D5') rows = rows.filter(r => r[COL.workCenter] === 'D5');
+  else if (scope === 'X2') rows = rows.filter(r => /^X2/.test(r[COL.workCenter] || ''));
+
+  if (rows.length === 0) {
+    alert(label + ' 无未检记录可导出'); return;
+  }
+
+  const exportData = rows.map((r, i) => ({
+    '序号': i + 1,
+    '生产订单': r['生产订单'] || '',
+    'WBS元素': r['WBS元素'] || '',
+    '物料号': r['物料号'] || '',
+    '物料描述': r[COL.material] || '',
+    '加工中心': r[COL.machDesc] || _getCenter(r),
+    '工作中心': r[COL.workCenter] || '',
+    '开始用户': r[COL.startUser] || '',
+    '结束用户': r[COL.endUser] || '',
+    '自检员': r[COL.selfInsp] || '',
+    '专检员': r[COL.qcInsp] || '',
+    '状态': '未检'
+  }));
+
+  const ws = XLSX.utils.json_to_sheet(exportData);
+  // 设置列宽
+  ws['!cols'] = [
+    { wch: 6 },   // 序号
+    { wch: 18 },  // 生产订单
+    { wch: 22 },  // WBS元素
+    { wch: 20 },  // 物料号
+    { wch: 30 },  // 物料描述
+    { wch: 30 },  // 加工中心
+    { wch: 10 },  // 工作中心
+    { wch: 18 },  // 开始用户
+    { wch: 18 },  // 结束用户
+    { wch: 16 },  // 自检员
+    { wch: 16 },  // 专检员
+    { wch: 8 },   // 状态
+  ];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, label + '_未检清单');
+
+  // 生成文件名
+  const now = new Date();
+  const ts = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
+  XLSX.writeFile(wb, `未检生产订单清单_${label}_${ts}.xlsx`);
+
+  // 关闭下拉菜单
+  const menu = document.getElementById('exportMenu');
+  if (menu) menu.classList.remove('show');
+}
+
+function _toggleExportMenu() {
+  const menu = document.getElementById('exportMenu');
+  if (menu) menu.classList.toggle('show');
+}
+
+// 点击页面其他区域关闭所有下拉菜单
+document.addEventListener('click', function(e) {
+  // 关闭未检导出菜单
+  const dd1 = document.querySelector('.export-dropdown:not(.export-dropdown-checked)');
+  const menu1 = document.getElementById('exportMenu');
+  if (menu1 && dd1 && !dd1.contains(e.target)) menu1.classList.remove('show');
+  // 关闭已检导出菜单
+  const dd2 = document.querySelector('.export-dropdown-checked');
+  const menu2 = document.getElementById('exportMenuChecked');
+  if (menu2 && dd2 && !dd2.contains(e.target)) menu2.classList.remove('show');
+});
+
+// ===================== 已检面板 =====================
+let _checkedAllRows = [];
+let _checkedFilter = 'all';
+let _checkedKeyword = '';
+let _checkedPage = 1;
+
+function renderCheckedPanel(allRows) {
+  // 筛选：自检员 OR 专检员至少一个有效 => 已检
+  const VALID_RE = /^(?:\d{4}|ADMIN_MES)-.+/;
+  const hasValid = v => v && VALID_RE.test(v.toString().trim());
+  const checked = allRows.filter(r => hasValid(r[COL.selfInsp]) || hasValid(r[COL.qcInsp]));
+
+  // 去重（同生产订单+物料号 只保留一条）
+  const seen = new Set();
+  const deduped = [];
+  checked.forEach(r => {
+    const k = (r['生产订单'] || '') + '|' + (r['物料号'] || '');
+    if (!seen.has(k)) { seen.add(k); deduped.push(r); }
+  });
+
+  _checkedAllRows = deduped;
+  _checkedFilter = 'all';
+  _checkedKeyword = '';
+  _checkedPage = 1;
+  _renderCheckedTable();
+}
+
+function _getCheckedInspector(row) {
+  const VALID_RE = /^(?:\d{4}|ADMIN_MES)-.+/;
+  const hasValid = v => v && VALID_RE.test(v.toString().trim());
+  const sd = hasValid(row[COL.selfInsp]);
+  const qd = hasValid(row[COL.qcInsp]);
+  if (sd && qd) return `${row[COL.selfInsp]} / ${row[COL.qcInsp]}`;
+  if (sd)       return row[COL.selfInsp];
+  if (qd)       return row[COL.qcInsp];
+  return '-';
+}
+
+function _fmtDate(v) {
+  if (!v) return '-';
+  const s = (typeof v === 'string' ? v : String(v)).trim();
+  if (!s) return '-';
+  // Try ISO format
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : s.slice(0, 10);
+}
+
+function _getCheckedDate(row) {
+  const VALID_RE = /^(?:\d{4}|ADMIN_MES)-.+/;
+  const hasValid = v => v && VALID_RE.test(v.toString().trim());
+  const sd = hasValid(row[COL.selfInsp]);
+  const qd = hasValid(row[COL.qcInsp]);
+  const sDate = _fmtDate(row[COL.selfDate]);
+  const qDate = _fmtDate(row[COL.qcDate]);
+  if (sd && qd) return sDate !== qDate ? `${sDate} / ${qDate}` : sDate;
+  if (sd)       return sDate;
+  if (qd)       return qDate;
+  return '-';
+}
+
+function _getCheckedStatus(row) {
+  const VALID_RE = /^(?:\d{4}|ADMIN_MES)-.+/;
+  const hasValid = v => v && VALID_RE.test(v.toString().trim());
+  const sd = hasValid(row[COL.selfInsp]);
+  const qd = hasValid(row[COL.qcInsp]);
+  if (sd && qd) return `<span class="status-both">✅ 自检+专检</span>`;
+  if (sd)       return `<span class="status-self">✔ 已自检</span>`;
+  if (qd)       return `<span class="status-qc">✔ 已专检</span>`;
+  return '-';
+}
+
+function _exportCheckedExcel(scope) {
+  if (!_checkedAllRows || _checkedAllRows.length === 0) {
+    alert('暂无已检记录可导出'); return;
+  }
+  let rows = _checkedAllRows;
+  const labelMap = { all: '全部', D1: 'D1精密', D5: 'D5鑫乘', X2: 'X2总装' };
+  const label = labelMap[scope] || '全部';
+
+  if (scope === 'D1') rows = rows.filter(r => r[COL.workCenter] === 'D1');
+  else if (scope === 'D5') rows = rows.filter(r => r[COL.workCenter] === 'D5');
+  else if (scope === 'X2') rows = rows.filter(r => /^X2/.test(r[COL.workCenter] || ''));
+
+  if (rows.length === 0) { alert(label + ' 无已检记录可导出'); return; }
+
+  const VALID_RE = /^(?:\d{4}|ADMIN_MES)-.+/;
+  const hasValid = v => v && VALID_RE.test(v.toString().trim());
+
+  const exportData = rows.map((r, i) => {
+    const sd = hasValid(r[COL.selfInsp]);
+    const qd = hasValid(r[COL.qcInsp]);
+    const statusText = (sd && qd) ? '自检+专检' : sd ? '已自检' : '已专检';
+    // 检验人员：有效的检验员
+    let inspector = '';
+    if (sd && qd) inspector = (r[COL.selfInsp] || '') + ' / ' + (r[COL.qcInsp] || '');
+    else if (sd) inspector = r[COL.selfInsp] || '';
+    else if (qd) inspector = r[COL.qcInsp] || '';
+    // 检验日期
+    const sD = _fmtDate(r[COL.selfDate]);
+    const qD = _fmtDate(r[COL.qcDate]);
+    let inspDate = '';
+    if (sd && qd) inspDate = sD !== qD ? sD + ' / ' + qD : sD;
+    else if (sd) inspDate = sD;
+    else if (qd) inspDate = qD;
+    return {
+      '序号': i + 1,
+      '生产订单': r['生产订单'] || '',
+      '物料号': r['物料号'] || '',
+      '物料描述': r[COL.material] || '',
+      '加工中心': r[COL.machDesc] || _getCenter(r),
+      '工作中心': r[COL.workCenter] || '',
+      '开始用户': r[COL.startUser] || '',
+      '结束用户': r[COL.endUser] || '',
+      '检验人员': inspector,
+      '检验日期': inspDate,
+      '自检员': r[COL.selfInsp] || '',
+      '专检员': r[COL.qcInsp] || '',
+      '状态': statusText
+    };
+  });
+
+  const ws = XLSX.utils.json_to_sheet(exportData);
+  ws['!cols'] = [
+    { wch: 6 }, { wch: 18 }, { wch: 20 }, { wch: 30 },
+    { wch: 30 }, { wch: 10 }, { wch: 18 }, { wch: 18 },
+    { wch: 22 }, { wch: 18 }, { wch: 16 }, { wch: 16 }, { wch: 12 }
+  ];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, label + '_已检清单');
+  const now = new Date();
+  const ts = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
+  XLSX.writeFile(wb, `已检生产订单清单_${label}_${ts}.xlsx`);
+  const menu = document.getElementById('exportMenuChecked');
+  if (menu) menu.classList.remove('show');
+}
+
+function _toggleCheckedExportMenu() {
+  const menu = document.getElementById('exportMenuChecked');
+  if (menu) menu.classList.toggle('show');
+}
+
+function _setCheckedFilter(filter) {
+  _checkedFilter = filter;
+  _checkedPage = 1;
+  _renderCheckedTable();
+}
+
+function _setCheckedSearch(keyword) {
+  _checkedKeyword = keyword;
+  _checkedPage = 1;
+  _renderCheckedTable(true);
+}
+
+function _changeCheckedPage(delta) {
+  _checkedPage += delta;
+  _renderCheckedTable();
+  document.getElementById('checkedPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function _renderCheckedTable(restoreSearchFocus = false) {
+  const container = document.getElementById('checkedPanel');
+  if (!container) return;
+
+  const filter = _checkedFilter;
+  const keyword = _checkedKeyword;
+  let rows = _checkedAllRows;
+
+  if (filter === 'D1') rows = rows.filter(r => r[COL.workCenter] === 'D1');
+  else if (filter === 'D5') rows = rows.filter(r => r[COL.workCenter] === 'D5');
+  else if (filter === 'X2') rows = rows.filter(r => /^X2/.test(r[COL.workCenter] || ''));
+
+  if (keyword) {
+    const kw = keyword.toLowerCase();
+    rows = rows.filter(r =>
+      (r['生产订单'] || '').toLowerCase().includes(kw) ||
+      (r['物料号'] || '').toLowerCase().includes(kw) ||
+      (r[COL.material] || '').toLowerCase().includes(kw) ||
+      (r[COL.machDesc] || '').toLowerCase().includes(kw) ||
+      (r[COL.selfInsp] || '').toLowerCase().includes(kw) ||
+      (r[COL.qcInsp] || '').toLowerCase().includes(kw) ||
+      (r[COL.startUser] || '').toLowerCase().includes(kw) ||
+      (r[COL.endUser] || '').toLowerCase().includes(kw) ||
+      (r[COL.selfDate] || '').toString().toLowerCase().includes(kw) ||
+      (r[COL.qcDate] || '').toString().toLowerCase().includes(kw)
+    );
+  }
+
+  const total = _checkedAllRows.length;
+  const filteredTotal = rows.length;
+  const pageCount = Math.max(1, Math.ceil(filteredTotal / TABLE_PAGE_SIZE));
+  _checkedPage = Math.max(1, Math.min(_checkedPage, pageCount));
+  const pageStart = (_checkedPage - 1) * TABLE_PAGE_SIZE;
+  const pageRows = rows.slice(pageStart, pageStart + TABLE_PAGE_SIZE);
+
+  const tableBody = pageRows.length === 0
+    ? `<tr><td colspan="10" class="checked-empty">暂无已检记录</td></tr>`
+    : pageRows.map((r, i) => `
+      <tr>
+        <td class="row-idx">${pageStart + i + 1}</td>
+        <td><span class="order-no">${escapeHtml(r['生产订单'] || '-')}</span></td>
+        <td><span class="mat-no">${escapeHtml(r['物料号'] || '-')}</span></td>
+        <td class="mat-desc">${escapeHtml(r[COL.material] || '-')}</td>
+        <td class="center-tag">${escapeHtml(r[COL.machDesc] || _getCenter(r))}</td>
+        <td style="color:var(--sub);font-size:12px;">${escapeHtml(r[COL.startUser] || '-')}</td>
+        <td style="color:var(--sub);font-size:12px;">${escapeHtml(r[COL.endUser] || '-')}</td>
+        <td style="font-size:12px;color:var(--accent1);">${escapeHtml(_getCheckedInspector(r))}</td>
+        <td style="font-size:12px;color:var(--sub);">${escapeHtml(_getCheckedDate(r))}</td>
+        <td>${_getCheckedStatus(r)}</td>
+      </tr>`).join('');
+
+  const makeBtn = (f, lbl) =>
+    `<button class="filter-btn${_checkedFilter === f ? ' active' : ''}" onclick="_setCheckedFilter('${f}')">${lbl}</button>`;
+
+  container.innerHTML = `
+    <div class="checked-panel">
+      <div class="checked-panel-header">
+        <div class="checked-panel-title">
+          ✅ 已检生产订单列表（自检或专检已完成）
+          <span class="checked-count-badge">共 ${total} 条</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <span style="font-size:12px;color:var(--sub)">自检员或专检员任一有效即视为已检</span>
+          <div class="export-dropdown export-dropdown-checked">
+            <button class="export-btn-checked" onclick="_toggleCheckedExportMenu()">📥 导出Excel ▾</button>
+            <div id="exportMenuChecked" class="export-menu">
+              <button class="export-menu-item" onclick="_exportCheckedExcel('all')">📋 导出全部 (${total})</button>
+              <button class="export-menu-item" onclick="_exportCheckedExcel('D1')">🔵 导出D1精密</button>
+              <button class="export-menu-item" onclick="_exportCheckedExcel('D5')">🟢 导出D5鑫乘</button>
+              <button class="export-menu-item" onclick="_exportCheckedExcel('X2')">🟡 导出X2总装</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="checked-filter-row">
+        ${makeBtn('all', '全部 (' + total + ')')}
+        ${makeBtn('D1', 'D1 精密')}
+        ${makeBtn('D5', 'D5 鑫乘')}
+        ${makeBtn('X2', 'X2 总装')}
+        <input id="checkedSearch" class="checked-search" placeholder="🔍 搜索生产订单 / 物料号 / 描述 / 检验员 / 日期 / 用户..."
+          oninput="_setCheckedSearch(this.value)" value="${_escapeAttr(keyword)}">
+      </div>
+      <div class="checked-table-wrap">
+        <table class="checked-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>生产订单</th>
+              <th>物料号</th>
+              <th>物料描述</th>
+              <th>加工中心</th>
+              <th>开始用户</th>
+              <th>结束用户</th>
+              <th>检验人员</th>
+              <th>检验日期</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody>${tableBody}</tbody>
+        </table>
+      </div>
+      <div class="checked-footer">
+        <span>匹配 <b>${filteredTotal}</b> / <b>${total}</b> 条，当前显示 ${pageRows.length} 条</span>
+        <div class="table-pagination" aria-label="已检记录分页">
+          <button class="page-btn" type="button" onclick="_changeCheckedPage(-1)" ${_checkedPage <= 1 ? 'disabled' : ''}>上一页</button>
+          <span class="page-indicator">${_checkedPage} / ${pageCount} 页</span>
+          <button class="page-btn" type="button" onclick="_changeCheckedPage(1)" ${_checkedPage >= pageCount ? 'disabled' : ''}>下一页</button>
+        </div>
+      </div>
+    </div>
+  `;
+  if (restoreSearchFocus) requestAnimationFrame(() => {
+    const input = document.getElementById('checkedSearch');
+    if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+  });
+}
+
+function _setUncheckedFilter(filter) {
+  _uncheckedFilter = filter;
+  _uncheckedPage = 1;
+  _renderUncheckedTable();
+}
+
+function _setUncheckedSearch(keyword) {
+  _uncheckedKeyword = keyword;
+  _uncheckedPage = 1;
+  _renderUncheckedTable(true);
+}
+
+function _changeUncheckedPage(delta) {
+  _uncheckedPage += delta;
+  _renderUncheckedTable();
+  document.getElementById('uncheckedPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+const _escapeAttr = escapeHtml;
+
+function _renderUncheckedTable(restoreSearchFocus = false) {
+  const container = document.getElementById('uncheckedPanel');
+  if (!container) return;
+
+  const filter = _uncheckedFilter;
+  const keyword = _uncheckedKeyword;
+  let rows = _uncheckedAllRows;
+
+  // Center filter
+  if (filter === 'D1') rows = rows.filter(r => r[COL.workCenter] === 'D1');
+  else if (filter === 'D5') rows = rows.filter(r => r[COL.workCenter] === 'D5');
+  else if (filter === 'X2') rows = rows.filter(r => /^X2/.test(r[COL.workCenter] || ''));
+
+  // Keyword search
+  if (keyword) {
+    const kw = keyword.toLowerCase();
+    rows = rows.filter(r =>
+      (r['生产订单'] || '').toLowerCase().includes(kw) ||
+      (r['WBS元素'] || '').toLowerCase().includes(kw) ||
+      (r['物料号'] || '').toLowerCase().includes(kw) ||
+      (r[COL.material] || '').toLowerCase().includes(kw) ||
+      (r[COL.machDesc] || '').toLowerCase().includes(kw) ||
+      (r[COL.startUser] || '').toLowerCase().includes(kw) ||
+      (r[COL.endUser] || '').toLowerCase().includes(kw)
+    );
+  }
+
+  const total = _uncheckedAllRows.length;
+  const filteredTotal = rows.length;
+  const pageCount = Math.max(1, Math.ceil(filteredTotal / TABLE_PAGE_SIZE));
+  _uncheckedPage = Math.max(1, Math.min(_uncheckedPage, pageCount));
+  const pageStart = (_uncheckedPage - 1) * TABLE_PAGE_SIZE;
+  const pageRows = rows.slice(pageStart, pageStart + TABLE_PAGE_SIZE);
+
+  const tableBody = pageRows.length === 0
+    ? `<tr><td colspan="9" class="unchecked-empty">🎉 当前筛选条件下无未检记录</td></tr>`
+    : pageRows.map((r, i) => `
+      <tr>
+        <td class="row-idx">${pageStart + i + 1}</td>
+        <td><span class="order-no">${escapeHtml(r['生产订单'] || '-')}</span></td>
+        <td><span class="mat-no">${escapeHtml(r['WBS元素'] || '-')}</span></td>
+        <td><span class="mat-no">${escapeHtml(r['物料号'] || '-')}</span></td>
+        <td class="mat-desc">${escapeHtml(r[COL.material] || '-')}</td>
+        <td class="center-tag">${escapeHtml(r[COL.machDesc] || _getCenter(r))}</td>
+        <td style="color:var(--sub);font-size:12px;">${escapeHtml(r[COL.startUser] || '-')}</td>
+        <td style="color:var(--sub);font-size:12px;">${escapeHtml(r[COL.endUser] || '-')}</td>
+        <td><span class="status-done">⚠ 未检</span></td>
+      </tr>`).join('');
+
+  const makeBtn = (f, label) =>
+    `<button class="filter-btn${_uncheckedFilter === f ? ' active' : ''}" onclick="_setUncheckedFilter('${f}')">${label}</button>`;
+
+  container.innerHTML = `
+    <div class="unchecked-panel">
+      <div class="unchecked-panel-header">
+        <div class="unchecked-panel-title">
+          ⚠ 未检生产订单列表（自检+专检均未完成）
+          <span class="unchecked-count-badge">共 ${total} 条</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <span style="font-size:12px;color:var(--sub)">自检员与专检员同时为空才视为未检</span>
+          <div class="export-dropdown">
+            <button class="export-btn" onclick="_toggleExportMenu()">📥 导出Excel ▾</button>
+            <div id="exportMenu" class="export-menu">
+              <button class="export-menu-item" onclick="_exportUncheckedExcel('all')">📋 导出全部 (${total})</button>
+              <button class="export-menu-item" onclick="_exportUncheckedExcel('D1')">🔵 导出D1精密</button>
+              <button class="export-menu-item" onclick="_exportUncheckedExcel('D5')">🟢 导出D5鑫乘</button>
+              <button class="export-menu-item" onclick="_exportUncheckedExcel('X2')">🟡 导出X2总装</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="unchecked-filter-row">
+        ${makeBtn('all', '全部 (' + total + ')')}
+        ${makeBtn('D1', 'D1 精密')}
+        ${makeBtn('D5', 'D5 鑫乘')}
+        ${makeBtn('X2', 'X2 总装')}
+        <input id="uncheckedSearch" class="unchecked-search" placeholder="🔍 搜索生产订单 / WBS元素 / 物料号 / 描述 / 用户..."
+          oninput="_setUncheckedSearch(this.value)" value="${_escapeAttr(keyword)}">
+      </div>
+      <div class="unchecked-table-wrap">
+        <table class="unchecked-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>生产订单</th>
+              <th>WBS元素</th>
+              <th>物料号</th>
+              <th>物料描述</th>
+              <th>加工中心</th>
+              <th>开始用户</th>
+              <th>结束用户</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody>${tableBody}</tbody>
+        </table>
+      </div>
+      <div class="unchecked-footer">
+        <span>匹配 <b>${filteredTotal}</b> / <b>${total}</b> 条，当前显示 ${pageRows.length} 条</span>
+        <div class="table-pagination" aria-label="未检记录分页">
+          <button class="page-btn" type="button" onclick="_changeUncheckedPage(-1)" ${_uncheckedPage <= 1 ? 'disabled' : ''}>上一页</button>
+          <span class="page-indicator">${_uncheckedPage} / ${pageCount} 页</span>
+          <button class="page-btn" type="button" onclick="_changeUncheckedPage(1)" ${_uncheckedPage >= pageCount ? 'disabled' : ''}>下一页</button>
+        </div>
+      </div>
+    </div>
+  `;
+  if (restoreSearchFocus) requestAnimationFrame(() => {
+    const input = document.getElementById('uncheckedSearch');
+    if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+  });
+}
+
+// ===================== 主渲染入口 =====================
+function renderDashboard(data) {
+  const normalized = normalizeRows(data);
+  const filtered = filterData(normalized);
+
+  // 提取日期
+  let dateStr = '--';
+  const dates = normalized.map(r => new Date(r[COL.date])).filter(d => !isNaN(d));
+  if (dates.length) {
+    const d = new Date(Math.max(...dates.map(value => value.getTime())));
+    dateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  }
+  const ageDays = dates.length ? Math.max(0, Math.floor((Date.now() - Math.max(...dates.map(value => value.getTime()))) / 86400000)) : null;
+  document.getElementById('headerMeta').textContent = ageDays !== null && ageDays > 7
+    ? `数据日期：${dateStr} · 已过期 ${ageDays} 天`
+    : `数据日期：${dateStr}`;
+
+  const d1Rows = filtered.filter(r => r[COL.workCenter] === 'D1');
+  const d5Rows = filtered.filter(r => r[COL.workCenter] === 'D5');
+  const x2Rows = filtered.filter(r => isX2(r[COL.workCenter]));
+
+  renderOverview(filtered, dateStr);
+  renderCenter(d1Rows, 'centerD1', '精密制造中心（D1）', 'var(--d1-color)', '#4f8ef7');
+  renderCenter(d5Rows, 'centerD5', '鑫乘制造中心（D5）', 'var(--d5-color)', '#36d7b7');
+  renderCenter(x2Rows, 'centerX2', '总装制造中心（X2）', 'var(--x2-color)', '#f5a623');
+  renderUncheckedPanel(filtered);
+  renderCheckedPanel(filtered);
+}
+
+// ===================== 文件上传解析 =====================
+function handleFileUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  if (!/\.xlsx?$/i.test(file.name)) {
+    document.getElementById('statusMsg').textContent = '仅支持 .xlsx / .xls 文件';
+    event.target.value = '';
+    return;
+  }
+  if (file.size > MAX_UPLOAD_BYTES) {
+    document.getElementById('statusMsg').textContent = '文件不能超过 5MB';
+    event.target.value = '';
+    return;
+  }
+
+  document.getElementById('statusMsg').textContent = '';
+  document.getElementById('loadingMask').classList.add('show');
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true, sheetRows: MAX_UPLOAD_ROWS + 1 });
+      const sheetName = wb.SheetNames[0];
+      const ws = wb.Sheets[sheetName];
+      const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
+      if (range.e.r + 1 > MAX_UPLOAD_ROWS) throw new Error(`数据不能超过 ${MAX_UPLOAD_ROWS} 行`);
+      if (range.e.c + 1 > MAX_UPLOAD_COLUMNS) throw new Error(`数据不能超过 ${MAX_UPLOAD_COLUMNS} 列`);
+      const data = XLSX.utils.sheet_to_json(ws, { defval: '' });
+
+      if (!data.length) throw new Error('文件无数据');
+      if (!data[0].hasOwnProperty('工作中心')) throw new Error('字段不匹配，请检查 Excel 模板');
+
+      document.getElementById('dataSourceTag').textContent = file.name;
+      document.getElementById('statusMsg').style.color = 'var(--green)';
+      document.getElementById('statusMsg').textContent = `✓ 已加载 ${data.length} 条记录`;
+      renderDashboard(data);
+    } catch (err) {
+      document.getElementById('statusMsg').style.color = 'var(--red)';
+      document.getElementById('statusMsg').textContent = '解析失败：' + err.message;
+    } finally {
+      document.getElementById('loadingMask').classList.remove('show');
+      event.target.value = '';
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// ===================== 内嵌默认数据 =====================
+// 将从页面加载时自动加载，如有更新只需上传新文件
+const DEFAULT_DATA = [];
+
+window.addEventListener('DOMContentLoaded', () => {
+  if (DEFAULT_DATA && DEFAULT_DATA.length) {
+    document.getElementById('dataSourceTag').textContent = '快照文件：工单专检信息 2026-05-15';
+    renderDashboard(DEFAULT_DATA);
+  }
+});
+</script>
+</body>
+</html>

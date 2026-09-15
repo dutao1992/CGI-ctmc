@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 
 import test_vehicle as fixtures
-from vehicle import quality
+from vehicle import quality, event_projection
 
 
 class StagedDeploymentTests(unittest.TestCase):
@@ -43,12 +43,15 @@ systemctl() { printf 'service-action:%s\\n' "$*"; return 0; }
             raw = module.raw_digest(c)
             self.assertEqual(c.execute('SELECT MIN(version) FROM point_quality').fetchone()[0], 6)
             c.execute("INSERT INTO audit(t,actor,action,target,detail) VALUES (1,'user','review','event','keep after snapshot')")
+            c.execute("""INSERT INTO events(id,device_id,kind,severity,start,end,peak,threshold,samples,
+                         rule_version,point_t,updated) VALUES (999,'6094510','data_gap','info',1,2,1,1,1,1,1,1)""")
         result = module.install_derived(self.store.path, candidate)
         self.assertTrue(result['raw_unchanged'])
         with self.store.connect() as c:
             self.assertEqual(module.raw_digest(c), raw)
             self.assertEqual(c.execute('SELECT MIN(version) FROM point_quality').fetchone()[0], quality.VERSION)
             self.assertEqual(c.execute("SELECT detail FROM audit WHERE actor='user'").fetchone()[0], 'keep after snapshot')
+            self.assertEqual(c.execute("SELECT kind FROM events WHERE id=999").fetchone()[0], 'data_gap')
         self.assertTrue(module.install_derived(self.store.path, backup, restore=True)['restored'])
         with self.store.connect() as c:
             self.assertEqual(module.raw_digest(c), raw)
@@ -96,6 +99,7 @@ systemctl() { printf 'service-action:%s\\n' "$*"; return 0; }
 
     def test_code_only_stage_skips_snapshot_and_backup(self):
         self.ingest(*fixtures.LIVE)
+        event_projection.rebuild(self.store)
         module = fixtures.DeployPreparationTests.module('prepare-quality.py')
         candidate, backup = self.root/'unused.sqlite', self.root/'unused-backup.sqlite'
         self.assertTrue(module.stage(self.store.path, str(candidate), backup, [])['skipped'])

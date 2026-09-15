@@ -12,8 +12,10 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 from vehicle.protocol import parse, checksum, gps_to_unix, FRAME, BASE, EXT, TAIL
-from vehicle import quality
-from vehicle.rules import conditions, DEFAULTS
+from vehicle import quality, event_projection
+from vehicle.rules import (conditions, threshold_conditions, THRESHOLD_EVENT_KINDS,
+                           DEFAULTS, LEGACY_THRESHOLD_DEFAULTS,
+                           THRESHOLD_DEFAULTS, THRESHOLD_POLICY_VERSION)
 from vehicle.store import Store, Ingestor, _sum_existing_sizes
 from vehicle.server import create_handler, BoundedServer
 from vehicle.offline import analyze_stream
@@ -76,6 +78,11 @@ class ProtocolTests(unittest.TestCase):
     def test_hex_status_warning(self):
         p=parse(altered(status='42',warning='4000'))
         self.assertEqual((p['fix_mode'],p['nav_mode'],p['warning']),(4,2,16384))
+    def test_rtk_fixed_and_float_are_valid_positions(self):
+        for status in ('42','52','82','92'):
+            with self.subTest(status=status):
+                p=parse(altered(status=status))
+                self.assertEqual(p['valid_pos'],1)
 
 
 class VibrationTests(unittest.TestCase):
@@ -169,15 +176,24 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(out['summary']['distance_km'],0)
         self.assertEqual(out['summary']['fixed_pct'],0)
         self.assertEqual(out['total'],20)
+    def test_valid_position_coverage_includes_rtk_fixed_and_float(self):
+        point=parse(LIVE[0]);tow=point['tow']
+        statuses=('42','52','82','92')
+        self.ingest(*[altered(tow=tow+i*.1,status=status) for i,status in enumerate(statuses)])
+        result=self.store.query('6094510',point['t']-1,point['t']+2)
+        self.assertEqual(result['summary']['valid_pct'],100)
+        self.assertEqual(result['summary']['fixed_pct'],50)
+        self.assertEqual(result['summary']['fix_counts'],{'4':1,'5':1,'8':1,'9':1})
     def test_gap_breaks_route_and_mileage(self):
         tow=parse(LIVE[0])['tow']
         self.ingest(*[navigation_frame(tow=tow+i/10,speed=10,ax=1.02) for i in range(11)],navigation_frame(tow=tow+20,speed=10,ax=1.02))
         t=parse(LIVE[0])['t'];out=self.store.query('6094510',t-1,t+25)
-        self.assertAlmostEqual(out['summary']['distance_km'],.005)
+        self.assertAlmostEqual(out['summary']['distance_km'],.01)
         self.assertEqual(out['summary']['gap_count'],1)
         self.assertEqual(out['gaps'],[[t+1,t+20]])
         self.assertTrue(out['track'][-1]['break_before'])
-        self.assertIn('data_gap',[e['kind'] for e in out['events']['items']])
+        self.assertNotIn('data_gap',[e['kind'] for e in out['events']['items']])
+        self.assertEqual(out['events']['total'],0)
     def test_raw_peak_preserved_in_bucket(self):
         tow=parse(LIVE[0])['tow']
         self.ingest(*[altered(tow=tow+i*.01,ax=5 if i==50 else 1) for i in range(100)])
@@ -281,7 +297,9 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(result['summary']['track_points'],4)
         self.assertEqual(result['aggregation']['track_points'],4)
     def test_event_review_and_rule_version_audited(self):
-        self.ingest(LIVE[0]);r=self.store.save_device('6094510',{'rules':{'speed_kmh':60},'mount_confirmed':True},'tester')
+        tow=parse(LIVE[0])['tow']
+        self.ingest(*[navigation_frame(tow=tow+i*.1,status='42',speed=30,ax=1.02,lat_std=.02,lon_std=.02) for i in range(35)])
+        r=self.store.save_device('6094510',{'rules':{'speed_kmh':60},'mount_confirmed':True},'tester')
         self.assertEqual(r['rule_version'],2)
         with self.assertRaises(ValueError):self.store.save_device('6094510',{'rules':{'speed_kmh':float('nan')}},'tester')
         with self.store.connect() as c:id=c.execute('SELECT id FROM events LIMIT 1').fetchone()[0]
@@ -289,9 +307,77 @@ class StoreTests(unittest.TestCase):
         self.store.review_event(id,{'status':'resolved','note':'test inspection'},'tester')
         with self.store.connect() as c:
             self.assertEqual(c.execute('SELECT COUNT(*) FROM audit').fetchone()[0],2)
-    def test_time_order_reversal_is_recorded(self):
+    def test_time_order_reversal_is_quality_evidence_not_operational_event(self):
         tow=parse(LIVE[0])['tow'];self.ingest(altered(tow=tow+1),altered(tow=tow))
-        t=parse(LIVE[0])['t'];self.assertIn('out_of_order',[e['kind'] for e in self.store.events('6094510',t-1,t+10)['items']])
+        t=parse(LIVE[0])['t'];self.assertNotIn('out_of_order',[e['kind'] for e in self.store.events('6094510',t-1,t+10)['items']])
+
+    def test_operational_events_are_reliable_threshold_exceedances_only(self):
+        point=parse(LIVE[0]);tow=point['tow']
+        diagnostic=conditions(point,None,None,DEFAULTS,False)
+        self.assertIn('hardware_warning',diagnostic)
+        self.assertEqual(threshold_conditions(point,None,None,DEFAULTS,False),{})
+        self.ingest(LIVE[0])
+        empty=self.store.events('6094510',point['t']-1,point['t']+2)
+        self.assertEqual(empty['items'],[])
+        self.assertEqual(empty['threshold_kinds'],list(THRESHOLD_EVENT_KINDS))
+        self.ingest(*[navigation_frame(tow=tow+10+i*.1,status='42',speed=30,ax=1.02,lat_std=.02,lon_std=.02) for i in range(35)])
+        result=self.store.events('6094510',point['t']+9,point['t']+20)
+        self.assertTrue(result['items'])
+        self.assertTrue(all(item['kind'] in THRESHOLD_EVENT_KINDS for item in result['items']))
+        self.assertTrue(all(item['event_category']=='threshold' for item in result['items']))
+        self.assertIn('top_events',result)
+        self.assertIn('group_counts',result)
+        self.assertTrue(all('excess' in item and 'excess_pct' in item for item in result['items']))
+        self.assertIn('数据质量异常请查看数据质量页',result['interpretation'])
+
+    def test_event_top10_is_grouped_sorted_and_carries_exceedance_detail(self):
+        point=parse(LIVE[0]);tow=point['tow']
+        frames=[navigation_frame(tow=tow+i*.1,status='42',speed=10,ax=1.02,
+                                 lat_std=.02,lon_std=.02) for i in range(20)]
+        self.ingest(*frames)
+        with self.store.connect() as c:
+            for index,peak in enumerate(range(86,98)):
+                t=parse(frames[index])['t']
+                c.execute('''INSERT INTO events(device_id,kind,severity,start,end,peak,threshold,
+                             samples,rule_version,point_t,updated) VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
+                          ('6094510','overspeed','warning',t,t,peak,85,1,3,t,time.time()))
+        result=self.store.events('6094510',point['t']-1,point['t']+5)
+        self.assertEqual(result['group_counts']['speed'],12)
+        top=result['top_events']['speed']
+        self.assertEqual(len(top),10)
+        self.assertEqual([item['peak'] for item in top],[97,96,95,94,93,92,91,90,89,88])
+        self.assertEqual(top[0]['excess'],12)
+        self.assertAlmostEqual(top[0]['excess_pct'],12/85*100,places=3)
+
+    def test_legacy_default_threshold_policy_migrates_once_and_is_audited(self):
+        self.ingest(LIVE[0])
+        legacy=dict(DEFAULTS)
+        legacy.pop('threshold_policy',None)
+        legacy.update(LEGACY_THRESHOLD_DEFAULTS)
+        legacy['version']=2
+        with self.store.connect() as c:
+            c.execute('UPDATE devices SET rules=? WHERE id=?',(json.dumps(legacy),'6094510'))
+        changed=event_projection.migrate_default_rules(self.store)
+        self.assertEqual(changed,['6094510'])
+        with self.store.connect() as c:
+            current=json.loads(c.execute('SELECT rules FROM devices WHERE id=?',('6094510',)).fetchone()[0])
+            self.assertEqual(current['threshold_policy'],THRESHOLD_POLICY_VERSION)
+            self.assertEqual({key:current[key] for key in THRESHOLD_DEFAULTS},THRESHOLD_DEFAULTS)
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM audit WHERE action='device.rules.migrate'").fetchone()[0],1)
+        self.assertEqual(event_projection.migrate_default_rules(self.store),[])
+
+    def test_threshold_event_is_hidden_when_peak_field_fails_quality(self):
+        point=parse(LIVE[0]);tow=point['tow']
+        frames=[navigation_frame(tow=tow+i*.1,status='42',speed=20,ax=1.02,lat_std=.02,lon_std=.02) for i in range(35)]
+        self.ingest(*frames)
+        peak=parse(frames[-1])['t']
+        with self.store.connect() as c:
+            c.execute("INSERT INTO events(device_id,kind,severity,start,end,peak,threshold,samples,rule_version,point_t,updated) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                      ('6094510','overspeed','warning',point['t'],peak,90,80,2,1,peak,time.time()))
+            c.execute('UPDATE point_quality SET mask=mask|? WHERE device_id=? AND t=?',
+                      (quality.BITS['speed'],'6094510',peak))
+        result=self.store.events('6094510',point['t']-1,point['t']+10)
+        self.assertNotIn('overspeed',{item['kind'] for item in result['items']})
     def test_safe_rules_on_live_uninitialized_data(self):
         p=parse(LIVE[0]);signals=conditions(p,None,None,DEFAULTS,False)
         self.assertIn('hardware_warning',signals)
@@ -304,6 +390,46 @@ class StoreTests(unittest.TestCase):
         t=parse(LIVE[0])['t'];events=self.store.events('6094510',t-1,t+10)['items']
         self.assertEqual(len([e for e in events if e['kind']=='overspeed']),1)
         self.assertNotIn('roll',[e['kind'] for e in events])
+
+    def test_reliable_attitude_and_shock_do_not_depend_on_navigation_or_speed(self):
+        tow=parse(LIVE[0])['tow']
+        self.ingest(LIVE[0])
+        self.store.save_device('6094510', {'mount_confirmed': True}, 'tester')
+        frames=[navigation_frame(tow=tow+10+i*.1,status='61',speed=.2,pitch=19,roll=21,ax=1.8,
+                                 lat_std=20,lon_std=20) for i in range(25)]
+        self.ingest(*frames)
+        t=parse(frames[0])['t']
+        kinds={item['kind'] for item in self.store.events('6094510',t-1,t+5)['items']}
+        self.assertEqual(kinds, {'pitch','roll','shock'})
+
+    def test_one_reliable_peak_visible_on_chart_is_also_an_event(self):
+        tow=parse(LIVE[0])['tow']
+        self.ingest(LIVE[0])
+        self.store.save_device('6094510', {'mount_confirmed': True}, 'tester')
+        peak=navigation_frame(tow=tow+10,status='61',speed=.2,pitch=19,roll=21,ax=1.9,
+                              lat_std=20,lon_std=20)
+        self.ingest(peak, navigation_frame(tow=tow+10.1,status='61',speed=.2,pitch=0,roll=0,ax=1,
+                                           lat_std=20,lon_std=20))
+        t=parse(peak)['t']
+        events=self.store.events('6094510',t-1,t+1)['items']
+        self.assertEqual({item['kind'] for item in events}, {'pitch','roll','shock'})
+        self.assertTrue(all(item['samples']==1 for item in events))
+
+    def test_historical_threshold_events_are_rebuilt_automatically(self):
+        tow=parse(LIVE[0])['tow']
+        self.ingest(LIVE[0])
+        self.store.save_device('6094510', {'mount_confirmed': True}, 'tester')
+        frames=[navigation_frame(tow=tow+10+i*.1,status='61',speed=.2,pitch=19,roll=21,ax=1.8,
+                                 lat_std=20,lon_std=20) for i in range(25)]
+        self.ingest(*frames)
+        t=parse(frames[0])['t']
+        with self.store.connect() as c:
+            c.execute("DELETE FROM events WHERE kind IN ('pitch','roll','shock')")
+        self.assertEqual(self.store.events('6094510',t-1,t+5)['items'], [])
+        self.assertGreaterEqual(event_projection.rebuild(self.store), 3)
+        kinds={item['kind'] for item in self.store.events('6094510',t-1,t+5)['items']}
+        self.assertEqual(kinds, {'pitch','roll','shock'})
+        self.assertEqual(event_projection.rebuild(self.store), 0)
     def test_empty_and_invalid_range(self):
         self.assertEqual(self.store.query('missing',100,101)['total'],0)
         with self.assertRaises(ValueError):self.store.query('missing',100,99)
@@ -392,8 +518,8 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(status,200);gzip_data=json.loads(gzip_body)
         self.assertEqual((gzip_data['total'],gzip_data['aggregation']['source'],gzip_data['offline']['compressed']),
                          (1,'offline_csv_gzip',True))
-        self.assertEqual(len(data['series']),31)
-        self.assertTrue({'speed_reference','speed_reference_low','speed_reference_high'} <= set(data['series']))
+        self.assertEqual(len(data['series']),28)
+        self.assertFalse({'speed_reference','speed_reference_low','speed_reference_high'} & set(data['series']))
         self.assertIn('track',data);self.assertIn('segments',data);self.assertIn('events',data)
         with self.store.connect() as c:
             after=(c.execute('SELECT COUNT(*) FROM points').fetchone()[0],c.execute('SELECT COUNT(*) FROM devices').fetchone()[0],
@@ -530,21 +656,21 @@ class QualityTests(unittest.TestCase):
         for span in (21600,172800):
             result=self.store.query(point['device_id'],start,start+span)
             self.assertEqual(result['aggregation']['source'],'raw')
-            self.assertTrue(all(row[1:]==[None,None,None] for row in result['series']['speed']))
+            self.assertTrue(all(row[1:]==[0,0,0] for row in result['series']['speed']))
         self.store.rebuild_rollups()
         for span,resolution in ((21600,60),(172800,600)):
             result=self.store.query(point['device_id'],start,start+span)
             self.assertEqual(result['aggregation']['source'],'rollup')
             self.assertEqual(result['aggregation']['source_resolution_s'],resolution)
-            self.assertTrue(all(row[1:]==[None,None,None] for row in result['series']['speed']))
+            self.assertTrue(all(row[1:]==[0,0,0] for row in result['series']['speed']))
         with self.store.connect() as c:
             self.assertEqual([tuple(row) for row in c.execute('SELECT * FROM points')],before)
 
-    def test_imu_quiet_signal_is_not_the_operational_motion_state(self):
+    def test_v10_vibration_is_the_operational_motion_state(self):
         point=parse(LIVE[0]);tow=point['tow'];self.t=point['t']
         stationary=altered(tow=tow,ax=1.004,ay=0,az=0,speed=30,status='60')
         boundary=altered(tow=tow+.1,ax=1.009,ay=0,az=0,speed=0,status='60')
-        moving=altered(tow=tow+.2,ax=1.011,ay=0,az=0,speed=0,status='60')
+        moving=altered(tow=tow+.2,ax=1.011,ay=0,az=0,speed=2,status='60')
         self.assertEqual(quality.motion_state(parse(stationary)),'stationary')
         self.assertEqual(quality.motion_state(parse(boundary)),'stationary')
         self.assertEqual(quality.motion_state(parse(moving)),'moving')
@@ -552,11 +678,13 @@ class QualityTests(unittest.TestCase):
         timestamps=[parse(frame)['t'] for frame in (stationary,boundary,moving)]
         for timestamp,state in zip(timestamps,('stationary','stationary','moving')):
             sample=self.store.point('6094510',timestamp)
-            self.assertEqual(sample['motion_state'],'unknown')
-        # IMU-only activity cannot establish navigation speed.
-        self.assertIsNone(self.store.point('6094510',timestamps[2])['speed'])
+            self.assertEqual(sample['motion_state'],state)
+        # Stationary vibration is the only case that forces zero; moving keeps GPCHCX.speed.
+        self.assertEqual(self.store.point('6094510',timestamps[0])['speed'],0)
+        self.assertEqual(self.store.point('6094510',timestamps[1])['speed'],0)
+        self.assertEqual(self.store.point('6094510',timestamps[2])['speed'],2)
         result=self.store.query('6094510',self.t-.1,self.t+1)
-        self.assertEqual(result['motion_states'][-1][1],'unknown')
+        self.assertEqual(result['motion_states'][-1][1],'moving')
 
     def test_v6_keeps_static_and_running_positions_but_masks_a_severe_jump(self):
         point=parse(LIVE[0]);tow=point['tow'];self.t=point['t']
@@ -619,22 +747,24 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(clean['gx'],.04);self.assertEqual(clean['ax'],.997)
         self.assertEqual(original['speed'],111.62);self.assertEqual(original['vu'],88.55)
         result=self.store.query('6094510',self.t-1,self.t+2)
-        self.assertIsNone(result['summary']['max_kmh'])
-        self.assertTrue(all(row[1:]==[None,None,None] for row in result['series']['speed']))
+        self.assertEqual(result['summary']['max_kmh'],0)
+        speed_rows=[row[1:] for row in result['series']['speed']]
+        self.assertIn([0,0,0],speed_rows)
+        self.assertIn([None,None,None],speed_rows)
         self.assertEqual(len(result['track']),1)
         records=self.store.quality_records('6094510',self.t,self.t+2,'anomaly')
         self.assertEqual(records['total'],1)
         self.assertIn('navigation_velocity_outlier',
                       {detail['code'] for detail in records['items'][0]['details']})
 
-    def test_v6_does_not_open_speed_or_position_based_stationary_contexts(self):
+    def test_v10_does_not_open_speed_or_position_based_stationary_contexts(self):
         p=parse(LIVE[0]);tow=p['tow'];self.t=p['t']
         frames=[navigation_frame(tow=tow+i,status='91',speed=.3,ve=0,vn=.3,
                         lat=p['lat']+i*.0000027,ax=1,ay=0,az=0) for i in range(121)]
         self.ingest(*frames)
         with self.store.connect() as c:
             self.assertFalse(quality.contexts(c,'6094510'))
-        self.assertTrue(all(self.store.point('6094510',self.t+i)['motion_state']=='moving' for i in range(2,121)))
+        self.assertTrue(all(self.store.point('6094510',self.t+i)['motion_state']=='stationary' for i in range(121)))
 
     def test_bounded_fact_does_not_filter_future_motion_or_another_device(self):
         self.reference();p=parse(LIVE[0]);tow=p['tow']
@@ -642,7 +772,7 @@ class QualityTests(unittest.TestCase):
                     *[navigation_frame(tow=tow+.4+i/10,sn='OTHER',status='42',speed=10,ax=1.02) for i in range(7)])
         future=self.store.query('6094510',self.t+15.5,self.t+18)
         self.assertEqual(future['summary']['max_kmh'],36)
-        self.assertAlmostEqual(future['summary']['distance_km'],.011)
+        self.assertAlmostEqual(future['summary']['distance_km'],.015)
         self.assertFalse(future['quality']['contexts'])
         other=self.store.point('OTHER',self.t+1)
         self.assertEqual(other['speed'],10);self.assertIsNotNone(other['heading']);self.assertIsNone(other['stationary_context'])
@@ -661,7 +791,7 @@ class QualityTests(unittest.TestCase):
         clean=self.store.point('6094510',self.t+20)
         self.assertEqual(clean['speed'],8);self.assertIsNotNone(clean['lat'])
         result=self.store.query('6094510',self.t+19,self.t+21)
-        self.assertAlmostEqual(result['summary']['distance_km'],.0008)
+        self.assertAlmostEqual(result['summary']['distance_km'],.0048)
         self.assertEqual(result['quality']['contexts'][0]['end'],None)
         self.assertTrue(result['quality']['contexts'][0]['active'])
         with self.store.connect() as c:
@@ -671,7 +801,10 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(self.store.point('6094510',self.t+20)['speed'],8)
         self.ing=Ingestor(self.store,self.raw)
         self.ingest(navigation_frame(tow=tow+21,status='42',speed=8,ax=1.02,lat_std=1,lon_std=1,alt_std=1))
-        self.assertEqual(self.store.point('6094510',self.t+21)['speed'],8)
+        # The sample jumps back to the prior position after the context closes;
+        # obvious navigation drift quarantines only its derived speed.
+        self.assertIsNone(self.store.point('6094510',self.t+21)['speed'])
+        self.assertEqual(self.store.point('6094510',self.t+21,raw=True)['speed'],8)
 
     def test_v6_static_position_is_retained_even_with_large_reported_uncertainty(self):
         p=parse(LIVE[0]);tow=p['tow'];self.t=p['t']
@@ -710,15 +843,16 @@ class QualityTests(unittest.TestCase):
         self.assertTrue(all(self.store.point('6094510',timestamp)['motion_state']=='moving' for timestamp in moving_times[5:]))
         self.assertIsNotNone(self.store.point('6094510',moving_times[0])['lat'])
 
-    def test_navigation_missing_is_unknown_even_when_imu_moves(self):
+    def test_navigation_missing_keeps_vibration_motion_state(self):
         p=parse(LIVE[0]);tow=p['tow'];self.t=p['t']
         self.ingest(*[altered(tow=tow+i*.1,status='60',speed=0,ax=1.02,ay=0,az=0,
                               lat=p['lat']+.000001*i) for i in range(20)])
         moving_times=[parse(altered(tow=tow+i*.1,status='60',speed=0,ax=1.02,ay=0,az=0,
                                     lat=p['lat']+.000001*i))['t'] for i in range(20)]
-        self.assertTrue(all(self.store.point('6094510',timestamp)['motion_state']=='unknown' for timestamp in moving_times))
+        self.assertTrue(all(self.store.point('6094510',timestamp)['motion_state']=='moving' for timestamp in moving_times))
         result=self.store.query('6094510',self.t-.1,self.t+2.1)
-        self.assertEqual(result['summary']['moving_s'],0)
+        self.assertGreater(result['summary']['moving_s'],0)
+        self.assertEqual(result['summary']['distance_km'],0)
         self.assertGreaterEqual(len(result['track']),1)
 
     def test_missing_assessment_fails_closed_and_backfill_is_idempotent(self):
@@ -728,7 +862,7 @@ class QualityTests(unittest.TestCase):
         result=self.store.query('6094510',t-1,t+1)
         self.assertEqual(result['track'],[]);self.assertIsNone(result['summary']['max_kmh']);self.assertEqual(result['quality']['pending_samples'],1)
         self.assertEqual(quality.backfill(self.store),1);self.assertEqual(quality.backfill(self.store),0)
-        self.assertIsNone(self.store.devices()[0]['latest']['speed'])
+        self.assertEqual(self.store.devices()[0]['latest']['speed'],0)
         self.assertEqual(self.store.point('6094510',t,raw=True)['speed'],parse(LIVE[0])['speed'])
 
     def test_gravity_baseline_and_attitude_wrapping_are_not_outliers(self):
@@ -758,7 +892,7 @@ class QualityTests(unittest.TestCase):
         self.ing=Ingestor(self.store,self.raw)
         self.ingest(altered(tow=tow+12,status='42',speed=30,lat_std=.02,lon_std=.02),
                     altered(tow=tow+14.5,status='42',speed=30,lat_std=.02,lon_std=.02))
-        self.assertIsNone(self.store.devices()[0]['latest']['speed'])
+        self.assertEqual(self.store.devices()[0]['latest']['speed'],0)
         self.assertEqual(self.store.point('6094510',self.t+14.5,raw=True)['speed'],30)
         self.assertNotIn('overspeed',{e['kind'] for e in self.store.events('6094510',self.t,self.t+15)['items']})
         with self.store.connect() as c:
@@ -905,13 +1039,16 @@ class RetentionTests(unittest.TestCase):
             self.assertEqual(c.execute('SELECT value FROM legacy_fixture').fetchone()[0],'keep')
         with sqlite3.connect(backup,factory=Connection) as c:self.assertEqual(c.execute('SELECT value FROM legacy_fixture').fetchone()[0],'keep')
     def test_deleted_event_ids_are_never_reused(self):
-        self.cold(self.old)
+        point=parse(LIVE[0]);tow=point['tow']
+        old_frames=[navigation_frame(tow=tow+i*.1,status='42',speed=30,ax=1.02,lat_std=.02,lon_std=.02) for i in range(35)]
+        self.cold(self.old,old_frames)
         with self.store.connect() as c:
             high=c.execute('SELECT MAX(id) FROM events').fetchone()[0]
-            c.execute('UPDATE events SET start=start-20*86400,end=end-20*86400')
+            self.assertIsNotNone(high)
+            c.execute('UPDATE events SET start=start-20*86400,end=end-20*86400,point_t=point_t-20*86400')
         self.ret.run(apply=True)
         newer=self.old.with_name('next.log')
-        newer.write_bytes(altered(tow=parse(LIVE[0])['tow']+100)+b'\r\n')
+        newer.write_bytes(b'\r\n'.join(navigation_frame(tow=tow+100+i*.1,status='42',speed=30,ax=1.02,lat_std=.02,lon_std=.02) for i in range(35))+b'\r\n')
         Ingestor(self.store,self.raw).scan()
         with self.store.connect() as c:
             self.assertGreater(c.execute('SELECT MIN(id) FROM events').fetchone()[0],high)
@@ -940,6 +1077,7 @@ class DeployPreparationTests(unittest.TestCase):
 
     def test_current_quality_and_rollups_skip_large_rebuild_backups(self):
         self.ingest(LIVE[0])
+        event_projection.rebuild(self.store)
         quality_prepare=self.module('prepare-quality.py')
         rollup_prepare=self.module('prepare-rollups.py')
         backup=self.root/'unneeded.sqlite'

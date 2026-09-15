@@ -1,0 +1,374 @@
+{
+  "date": "2026-09-05",
+  "timezone": "Asia/Shanghai",
+  "vehicle_release": "/srv/ctmc-vehicle/releases/20260905-214811",
+  "baseline_vehicle_release": "/srv/ctmc-vehicle/releases/20260905-115849",
+  "portal_release": "/srv/ctmc-quality/releases/20260903-091310-ablation",
+  "method": "Sequential read-only query profiling on production host in isolated Python process; application cache cold then immediate warm; OS cache uncontrolled; excludes HTTP auth, queue, network and browser rendering; not p95.",
+  "browser_runs": {
+    "browser": "Chrome",
+    "session": "authenticated user session",
+    "network": "no throttling",
+    "measurement": "Click-to-visible result state, polled through accessibility tree; includes auth/network/JSON/rendering and the observation wait, so each value is an upper-bound sample rather than high-resolution RUM.",
+    "runs": [
+      {
+        "action": "latest sample shortcut to 15 minutes",
+        "click_to_result_ms": 4581,
+        "server_query_ms_displayed": 1602,
+        "samples": 6660,
+        "buckets": 267,
+        "curve_visible": true
+      },
+      {
+        "action": "96 hour shortcut from inertial analysis page",
+        "click_to_result_ms": 46161,
+        "server_query_ms_displayed": 43583,
+        "samples": 938577,
+        "buckets": 80,
+        "curve_visible": true,
+        "pending_after_17s": true
+      },
+      {
+        "action": "open inertial analysis after 15 minute result",
+        "click_to_result_ms": 1003,
+        "charts_visible": 14
+      }
+    ]
+  },
+  "post_fix": {
+    "vehicle_release": "/srv/ctmc-vehicle/releases/20260905-214811",
+    "assets_match_worktree": true,
+    "service": "active",
+    "retention_timer": "active",
+    "restarts": 0,
+    "healthz_ok": true,
+    "browser": "authenticated desktop Chrome",
+    "browser_result": {
+      "action": "96 hour shortcut after refresh",
+      "samples": 724007,
+      "vibration_buckets": 62,
+      "speed_curve_before_map": true,
+      "vibration_curve_before_map": true,
+      "map_present": true
+    },
+    "window_runs": [
+      {"span_s": 900, "cold_ms": 1163.3, "vibration_ms": 482.1, "samples": 6660},
+      {"span_s": 3600, "cold_ms": 1241.9, "vibration_ms": 482.1, "samples": 6660},
+      {"span_s": 86400, "cold_ms": 649.9, "vibration_ms": 548.0, "samples": 6660},
+      {"span_s": 345600, "cold_ms": 3898.7, "vibration_ms": 2762.6, "samples": 938577},
+      {"span_s": 864000, "cold_ms": 4979.4, "vibration_ms": 3351.1, "samples": 2329863},
+      {"span_s": 2592000, "cold_ms": 4460.2, "vibration_ms": 3035.6, "samples": 2355303}
+    ],
+    "stages_96h": {
+      "query_ms": 5218.2009420357645,
+      "timings": {"vibration_ms": 3007.3, "events_ms": 39.5},
+      "combiner": {
+        "anchor_track_count": 7829,
+        "anchor_segment_count": 13254,
+        "stationary_segment_count": 6302,
+        "anchor_ms": 103.55391399934888,
+        "finish_ms": 134.1361739905551
+      }
+    },
+    "tests": {
+      "python_local": 120,
+      "python_remote": 120,
+      "node_local": 46,
+      "node_deploy": 45,
+      "syntax_and_diff_check": true
+    }
+  },
+  "latest_sample_anchor": "2026-09-05T15:58:06+08:00",
+  "latest_window_runs": [
+    {
+      "span_s": 900,
+      "bins": 360,
+      "samples": 6660,
+      "cold_ms": 1338.9,
+      "warm_ms": 1.0,
+      "stages": {
+        "vibration_ms": 490.7,
+        "events_ms": 12.2
+      },
+      "serialize_ms": 22.3,
+      "gzip_ms": 6.5,
+      "json_bytes": 500826,
+      "gzip_bytes": 85349,
+      "aggregation": {
+        "buckets": 267,
+        "bucket_s": 2.5,
+        "source": "raw",
+        "source_resolution_s": 0,
+        "query_ms": 1336.6,
+        "cache_hit": false,
+        "track_points": 449
+      },
+      "sections_bytes": {
+        "device_id": 9,
+        "start": 10,
+        "end": 10,
+        "total": 4,
+        "track": 103059,
+        "gaps": 2,
+        "track_truncated": 5,
+        "series": 322079,
+        "motion_states": 10784,
+        "quality": 2509,
+        "segments": 500,
+        "summary": 412,
+        "aggregation": 910,
+        "vibration": 50162,
+        "events": 10168
+      },
+      "event_count": 10,
+      "vibration_available": true
+    },
+    {
+      "span_s": 3600,
+      "bins": 360,
+      "samples": 6660,
+      "cold_ms": 1130.5,
+      "warm_ms": 1.0,
+      "stages": {
+        "vibration_ms": 483.2,
+        "events_ms": 3.2
+      },
+      "serialize_ms": 8.5,
+      "gzip_ms": 2.7,
+      "json_bytes": 188960,
+      "gzip_bytes": 36300,
+      "aggregation": {
+        "buckets": 67,
+        "bucket_s": 10.0,
+        "source": "raw",
+        "source_resolution_s": 0,
+        "query_ms": 1129.2,
+        "cache_hit": false,
+        "track_points": 239
+      },
+      "sections_bytes": {
+        "device_id": 9,
+        "start": 10,
+        "end": 10,
+        "total": 4,
+        "track": 53123,
+        "gaps": 2,
+        "track_truncated": 5,
+        "series": 83273,
+        "motion_states": 2711,
+        "quality": 2509,
+        "segments": 500,
+        "summary": 410,
+        "aggregation": 910,
+        "vibration": 35113,
+        "events": 10168
+      },
+      "event_count": 10,
+      "vibration_available": true
+    },
+    {
+      "span_s": 86400,
+      "bins": 360,
+      "samples": 6660,
+      "cold_ms": 678.1,
+      "warm_ms": 1.1,
+      "stages": {
+        "vibration_ms": 553.7,
+        "events_ms": 2.9
+      },
+      "serialize_ms": 3.5,
+      "gzip_ms": 1.3,
+      "json_bytes": 88807,
+      "gzip_bytes": 17907,
+      "aggregation": {
+        "buckets": 3,
+        "bucket_s": 240.0,
+        "source": "rollup",
+        "source_resolution_s": 60,
+        "query_ms": 676.4,
+        "cache_hit": false,
+        "track_points": 181
+      },
+      "sections_bytes": {
+        "device_id": 9,
+        "start": 10,
+        "end": 10,
+        "total": 4,
+        "track": 39249,
+        "gaps": 2,
+        "track_truncated": 5,
+        "series": 4449,
+        "motion_states": 120,
+        "quality": 2509,
+        "segments": 500,
+        "summary": 412,
+        "aggregation": 913,
+        "vibration": 30244,
+        "events": 10168
+      },
+      "event_count": 10,
+      "vibration_available": true
+    },
+    {
+      "span_s": 345600,
+      "bins": 288,
+      "samples": 938577,
+      "cold_ms": 30535.8,
+      "warm_ms": 1.2,
+      "stages": {
+        "vibration_ms": 2945.4,
+        "events_ms": 14.8
+      },
+      "serialize_ms": 82.6,
+      "gzip_ms": 14.4,
+      "json_bytes": 2122856,
+      "gzip_bytes": 135701,
+      "aggregation": {
+        "buckets": 80,
+        "bucket_s": 1200.0,
+        "source": "rollup",
+        "source_resolution_s": 600,
+        "query_ms": 30506.5,
+        "cache_hit": false,
+        "track_points": 7829
+      },
+      "sections_bytes": {
+        "device_id": 9,
+        "start": 10,
+        "end": 10,
+        "total": 6,
+        "track": 1847732,
+        "gaps": 92,
+        "track_truncated": 5,
+        "series": 107028,
+        "motion_states": 3349,
+        "quality": 2535,
+        "segments": 17500,
+        "summary": 504,
+        "aggregation": 919,
+        "vibration": 36295,
+        "events": 106659
+      },
+      "event_count": 177,
+      "vibration_available": true
+    },
+    {
+      "span_s": 864000,
+      "bins": 240,
+      "samples": 2329863,
+      "cold_ms": 88035.1,
+      "warm_ms": 1.1,
+      "stages": {
+        "vibration_ms": 3491.1,
+        "events_ms": 39.8
+      },
+      "serialize_ms": 152.6,
+      "gzip_ms": 24.9,
+      "json_bytes": 3949608,
+      "gzip_bytes": 224327,
+      "aggregation": {
+        "buckets": 71,
+        "bucket_s": 3600.0,
+        "source": "rollup",
+        "source_resolution_s": 600,
+        "query_ms": 87979.9,
+        "cache_hit": false,
+        "track_points": 15200
+      },
+      "sections_bytes": {
+        "device_id": 9,
+        "start": 10,
+        "end": 10,
+        "total": 7,
+        "track": 3637579,
+        "gaps": 722,
+        "track_truncated": 5,
+        "series": 98501,
+        "motion_states": 2973,
+        "quality": 2539,
+        "segments": 53600,
+        "summary": 510,
+        "aggregation": 920,
+        "vibration": 35588,
+        "events": 116432
+      },
+      "event_count": 197,
+      "vibration_available": true
+    }
+  ],
+  "dense_window_runs": [
+    {
+      "span_s": 3600,
+      "bins": 360,
+      "samples": 36001,
+      "cold_ms": 6328.7,
+      "warm_ms": 1.0,
+      "stages": {
+        "vibration_ms": 2721.6,
+        "events_ms": 2.3
+      },
+      "serialize_ms": 21.8,
+      "gzip_ms": 4.5,
+      "json_bytes": 477107,
+      "gzip_bytes": 55722,
+      "aggregation": {
+        "buckets": 360,
+        "bucket_s": 10.0,
+        "source": "raw",
+        "source_resolution_s": 0,
+        "query_ms": 6327.2,
+        "cache_hit": false,
+        "track_points": 0
+      },
+      "sections_bytes": {
+        "device_id": 9,
+        "start": 10,
+        "end": 10,
+        "total": 5,
+        "track": 2,
+        "gaps": 2,
+        "track_truncated": 5,
+        "series": 399712,
+        "motion_states": 15077,
+        "quality": 2388,
+        "segments": 600,
+        "summary": 303,
+        "aggregation": 909,
+        "vibration": 57433,
+        "events": 439
+      },
+      "event_count": 0,
+      "vibration_available": true
+    }
+  ],
+  "long_run_limit": "Baseline batch limit: 150 seconds for the pre-fix multi-window run; the pre-fix 30-day query was interrupted by the remaining batch deadline.",
+  "stages_96h": {
+    "query_ms": 30734.875138965435,
+    "timings": {
+      "vibration_ms": 2781.1,
+      "events_ms": 8.7
+    },
+    "combiner": {
+      "_merge_metrics": 17.067341948859394,
+      "_merge_segments": 25.152545771561563,
+      "_append_track": 20.76192118693143,
+      "add": 67.02001544181257,
+      "anchor_track_count": 7829,
+      "anchor_segment_count": 13254,
+      "stationary_segment_count": 6302,
+      "anchor_ms": 26849.624298978597,
+      "finish": 26880.401090951636
+    }
+  },
+  "runtime_snapshot": {
+    "cpus": 2,
+    "memory_total_MiB": 1888,
+    "memory_available_MiB": 903,
+    "swap_used_MiB": 511,
+    "disk_used_percent": 80,
+    "disk_available": "7.8G",
+    "db_size": "1.9G",
+    "device_point_count": 2355303
+  },
+  "browser_boundary": "Post-fix authenticated desktop Chrome was refreshed and completed the 96-hour shortcut; the accessibility state verified curve-before-map order and visible result, but no 20-run p95 timing was collected."
+}

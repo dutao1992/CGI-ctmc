@@ -1,0 +1,5 @@
+{
+  "source": "待上传或接入的数据源",
+  "latest_data_at": null,
+  "freshness_threshold_days": 7
+}

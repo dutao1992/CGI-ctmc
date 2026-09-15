@@ -29,7 +29,7 @@ SystemCallArchitectures=native
 CapabilityBoundingSet=
 ReadWritePaths=/srv/ctmc-vehicle/data
 ReadOnlyPaths=/srv/chcnav-cgi430/logs/raw
-MemoryMax=512M
+MemoryMax=768M
 CPUQuota=80%
 Nice=5
 

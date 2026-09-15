@@ -1,0 +1,16 @@
+[Unit]
+Description=CTMC Quality Failure Analysis API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/srv/ctmc-quality/current/backend
+EnvironmentFile=/srv/ctmc-quality/current/.env
+ExecStart=/srv/ctmc-quality/current/.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8010 --proxy-headers
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

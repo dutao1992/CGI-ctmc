@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#102b25" />
+    <meta name="description" content="烟草包装机运行状态评价、风险预警与质量信号分析" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <title>机组运行评价 · CTMC QUALITY</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <a class="brand-mark" href="/" aria-label="返回 CTMC Quality OS 首页">MW</a>
+        <div>
+          <p><a class="platform-home" href="/">CTMC QUALITY</a><span> / </span>Machine Watch · 设备运行中心</p>
+          <h1>烟草包装机运行状态评价与故障预警系统</h1>
+        </div>
+      </div>
+      <div class="top-actions">
+        <div class="data-state">
+          <span class="live-dot"></span>
+          <span id="generatedAt">正在载入数据</span>
+        </div>
+        <button id="refreshBtn" class="square-button" type="button" title="校验数据源并刷新" aria-label="校验数据源并刷新">校验刷新</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="summary-grid" aria-label="核心指标">
+        <article class="metric metric-total">
+          <span>设备总数</span>
+          <strong id="machineCount">--</strong>
+          <small id="coverageText">--</small>
+        </article>
+        <article class="metric metric-red" data-status-filter="red" tabindex="0">
+          <span>红色状态</span>
+          <strong id="redCount">--</strong>
+          <small>立即处置</small>
+        </article>
+        <article class="metric metric-yellow" data-status-filter="yellow" tabindex="0">
+          <span>黄色状态</span>
+          <strong id="yellowCount">--</strong>
+          <small>计划干预</small>
+        </article>
+        <article class="metric metric-green" data-status-filter="green" tabindex="0">
+          <span>绿色状态</span>
+          <strong id="greenCount">--</strong>
+          <small>稳定运行</small>
+        </article>
+        <article class="metric metric-alert">
+          <span>高风险预警</span>
+          <strong id="highAlertCount">--</strong>
+          <small>规则模型命中</small>
+        </article>
+        <article class="metric metric-coverage">
+          <span>出厂前平均评分</span>
+          <strong id="factoryScoreMetric">--</strong>
+          <small id="factoryScoreCoverage">--</small>
+        </article>
+      </section>
+
+      <section class="toolbar" aria-label="筛选与视图控制">
+        <div class="search-field">
+          <label for="searchInput">搜索机组</label>
+          <input id="searchInput" type="search" placeholder="机组号、烟厂、机型、地区" />
+        </div>
+        <label>
+          状态
+          <select id="statusFilter">
+            <option value="">全部状态</option>
+            <option value="red">红色</option>
+            <option value="yellow">黄色</option>
+            <option value="green">绿色</option>
+          </select>
+        </label>
+        <label>
+          机型
+          <select id="modelFilter"><option value="">全部机型</option></select>
+        </label>
+        <label>
+          省份
+          <select id="provinceFilter"><option value="">全部省份</option></select>
+        </label>
+        <label>
+          排序
+          <select id="sortSelect">
+            <option value="riskDesc">风险从高到低</option>
+            <option value="scoreDesc">健康分从高到低</option>
+            <option value="idAsc">机组号升序</option>
+          </select>
+        </label>
+        <button id="toggleFilters" class="secondary-button filter-toggle" type="button" aria-expanded="false">更多筛选</button>
+        <button id="resetFilters" class="secondary-button" type="button">清除筛选</button>
+      </section>
+
+      <section class="overview-grid">
+        <article class="panel status-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">全局态势</p>
+              <h2>红黄绿状态分布</h2>
+            </div>
+            <span class="panel-note">点击指标卡可筛选</span>
+          </div>
+          <canvas id="statusChart" aria-label="红黄绿状态分布"></canvas>
+        </article>
+
+        <article class="panel map-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">区域分布</p>
+              <h2>全国机组风险地图</h2>
+            </div>
+            <span class="panel-note">圆点大小代表机组数量</span>
+          </div>
+          <div class="map-stage">
+            <canvas id="provinceMap" aria-label="全国机组风险地图"></canvas>
+            <div id="mapTooltip" class="map-tooltip" hidden></div>
+          </div>
+          <div class="map-legend">
+            <span><i class="legend-dot green"></i>低风险</span>
+            <span><i class="legend-dot yellow"></i>中风险</span>
+            <span><i class="legend-dot red"></i>高风险</span>
+            <button id="clearProvince" type="button" hidden>取消区域筛选</button>
+          </div>
+        </article>
+
+        <article class="panel alert-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">预警队列</p>
+              <h2>优先处置事项</h2>
+            </div>
+            <span id="alertCount" class="panel-note">--</span>
+          </div>
+          <div id="alerts" class="alerts"></div>
+        </article>
+      </section>
+
+      <section class="analysis-section">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">多维分析</p>
+            <h2>风险驱动与质量信号</h2>
+          </div>
+          <div class="segmented" role="tablist" aria-label="分析维度">
+            <button class="active" data-analysis="risk" type="button">风险驱动</button>
+            <button data-analysis="quality" type="button">质量诊断</button>
+            <button data-analysis="factory" type="button">出厂评分</button>
+          </div>
+          <button id="toggleAnalysis" class="secondary-button analysis-toggle" type="button" aria-expanded="false">展开分析图表</button>
+        </div>
+
+        <div id="riskAnalysis" class="chart-grid analysis-view active">
+          <article class="panel chart-wide">
+            <div class="panel-head"><h3>机型平均风险排行</h3><span>平均风险 / 设备数</span></div>
+            <canvas id="riskModelChart" role="img" aria-label="各机型平均风险及设备数量排行"></canvas>
+          </article>
+          <article class="panel">
+            <div class="panel-head"><h3>风险构成</h3><span>累计风险贡献</span></div>
+            <canvas id="componentChart" role="img" aria-label="各风险因素累计贡献"></canvas>
+          </article>
+          <article class="panel">
+            <div class="panel-head"><h3>省份风险排行</h3><span>平均风险</span></div>
+            <canvas id="provinceRiskChart" role="img" aria-label="各省份机组平均风险排行"></canvas>
+          </article>
+        </div>
+
+        <div id="qualityAnalysis" class="chart-grid analysis-view">
+          <article class="panel">
+            <div class="panel-head"><h3>巡检状态</h3><span>红黄绿点位</span></div>
+            <canvas id="inspectionChart" role="img" aria-label="巡检红黄绿状态点位数量"></canvas>
+          </article>
+          <article class="panel">
+            <div class="panel-head"><h3>诊断优先级</h3><span>A / B / C</span></div>
+            <canvas id="diagnosisChart" role="img" aria-label="诊断问题优先级分布"></canvas>
+          </article>
+          <article class="panel">
+            <div class="panel-head"><h3>NCR 问题等级</h3><span>A / B / C</span></div>
+            <canvas id="ncrChart" role="img" aria-label="NCR问题等级分布"></canvas>
+          </article>
+          <article class="panel chart-wide">
+            <div class="panel-head"><h3>调试异常类型</h3><span>累计问题数</span></div>
+            <canvas id="issueChart" role="img" aria-label="调试异常类型累计问题数"></canvas>
+          </article>
+        </div>
+
+        <div id="factoryAnalysis" class="chart-grid analysis-view">
+          <article class="panel">
+            <div class="panel-head"><h3>评分分布</h3><span>机组数量</span></div>
+            <canvas id="factoryBandChart" role="img" aria-label="机组出厂评分区间分布"></canvas>
+          </article>
+          <article class="panel chart-wide">
+            <div class="panel-head"><h3>各道序累计扣分</h3><span>去重后扣分</span></div>
+            <canvas id="factoryStageChart" role="img" aria-label="各道序累计扣分"></canvas>
+          </article>
+          <article class="panel chart-wide">
+            <div class="panel-head"><h3>机型平均出厂评分</h3><span>平均分 / 设备数</span></div>
+            <canvas id="factoryModelChart" role="img" aria-label="各机型平均出厂评分及设备数量"></canvas>
+          </article>
+          <article class="panel">
+            <div class="panel-head"><h3>调试部门评分</h3><span>平均分</span></div>
+            <canvas id="factoryDeptChart" role="img" aria-label="各调试部门平均评分"></canvas>
+          </article>
+        </div>
+      </section>
+
+      <section class="machine-section">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">设备清单</p>
+            <h2>机组运行状态</h2>
+            <p class="section-caption">默认按风险从高到低排列，优先处理红色与高风险机组。</p>
+          </div>
+          <div class="result-meta">
+            <span id="rowCount">--</span>
+            <span id="activeFilterText">全部机组</span>
+          </div>
+        </div>
+        <div id="machineGrid" class="machine-grid"></div>
+        <button id="loadMoreBtn" class="load-more" type="button" hidden>加载更多机组</button>
+      </section>
+
+      <section class="methodology-strip">
+        <div>
+          <p class="section-kicker">评价口径</p>
+          <h2>健康分与数据边界</h2>
+        </div>
+        <div id="methodology"></div>
+      </section>
+    </main>
+
+    <div id="drawerBackdrop" class="drawer-backdrop" hidden></div>
+    <aside id="machineDrawer" class="machine-drawer" aria-hidden="true" aria-label="机组详情">
+      <header class="drawer-header">
+        <div>
+          <p id="drawerFactory">机组详情</p>
+          <h2 id="drawerTitle">--</h2>
+        </div>
+        <button id="closeDrawer" class="close-button" type="button" aria-label="关闭详情">关闭</button>
+      </header>
+      <div id="drawerHero" class="drawer-hero"></div>
+      <nav class="drawer-tabs" aria-label="详情分类">
+        <button class="active" data-detail-tab="overview" type="button">概览</button>
+        <button data-detail-tab="operation" type="button">运行质量</button>
+        <button data-detail-tab="maintenance" type="button">巡检诊断</button>
+        <button data-detail-tab="factory" type="button">出厂评分</button>
+        <button data-detail-tab="events" type="button">异常与来源</button>
+      </nav>
+      <div id="drawerContent" class="drawer-content"></div>
+    </aside>
+    <div id="refreshToast" class="refresh-toast" hidden></div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

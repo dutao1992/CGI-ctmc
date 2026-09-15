@@ -20,6 +20,7 @@ from .protocol import describe, NUMERIC, parse
 from .store import Store, Ingestor
 from .rules import LABELS
 from . import quality
+from . import event_projection
 from .offline import (EXPORT_FIELDS, MAX_BYTES as OFFLINE_MAX_BYTES,
                       MAX_GZIP_BYTES as OFFLINE_MAX_GZIP_BYTES, analyze_stream)
 
@@ -355,7 +356,9 @@ def main():
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
     store,stop = Store(args.db),threading.Event()
     # Resume an interrupted migration before serving operational measurements.
-    quality.backfill(store)
+    policy_devices = event_projection.migrate_default_rules(store)
+    quality_rows = quality.backfill(store)
+    event_projection.rebuild(store, force=bool(quality_rows or policy_devices))
     ingestor = Ingestor(store,args.raw)
     if args.once:
         ingestor.scan()

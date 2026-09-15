@@ -1,0 +1,42 @@
+{
+  "date": "2026-09-06",
+  "scope": "Production deployed source snapshots for local audit; includes embedded business data; do not publish",
+  "files": {
+    "platform_auth.py": {
+      "bytes": 28413,
+      "sha256": "718378fcc65c016ad932c47662c925b8ac0a3f07dcbe35d5240718e54deda554"
+    },
+    "web-standalone.conf": {
+      "bytes": 6891,
+      "sha256": "9b7b1a37760498820fc8e583fdd5c58cdaf5b38407d9c32cd788534878eb639b"
+    },
+    "platform_app.py": {
+      "bytes": 41685,
+      "sha256": "779b3da83ba53df4cfea37d24cfe398e8e53f469c02d0ee7a4c106eb3aadbb69"
+    },
+    "trace.js": {
+      "bytes": 131176,
+      "sha256": "789466a4b0b05a5490b21caa81afe48cc7499ac7d03ac547e93aae7dd343d4ab"
+    },
+    "portal.js": {
+      "bytes": 180334,
+      "sha256": "2b474d75086d9cb3ae5f5c20da4c01f6cd3de51683af11cbe11b740a807643ce"
+    },
+    "machine_watch.js": {
+      "bytes": 38508,
+      "sha256": "f6f03d1569060b546ccdc8f502ca1244b6362d527e9b7e5a2d0f36c692d70d06"
+    },
+    "trace_app.py": {
+      "bytes": 297377,
+      "sha256": "171f492b12b0b8156415327642b11e3c717040ed01937e186690580e0575291f"
+    },
+    "failure.js": {
+      "bytes": 174272,
+      "sha256": "ddb70c4dfe399edd0fa8c80867e3d42e9ba372eaaadabc61d013f05455874213"
+    },
+    "assembly.html": {
+      "bytes": 571945,
+      "sha256": "1d706a64120c126a9933db6199629ead8afc3e1646edc8dd12daba6b018e9d29"
+    }
+  }
+}

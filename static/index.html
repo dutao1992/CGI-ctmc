@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#102f29"><title>CGI 车载数据服务 · CTMC Quality OS</title>
-  <link rel="stylesheet" href="./vendor/leaflet.css?v=a78371028241"><link rel="stylesheet" href="./style.css?v=a919dc3f9191">
+  <link rel="stylesheet" href="./vendor/leaflet.css?v=a78371028241"><link rel="stylesheet" href="./style.css?v=cc14406cc95f">
   <script defer src="./vendor/leaflet.js?v=db49d009c841"></script><script defer src="./vendor/echarts.min.js?v=b66b25aeb4df"></script><script defer src="./vendor/coordtransform.js?v=e941a1a5825c"></script>
   <script defer src="./map.js?v=5e1771241c19"></script>
-  <script defer src="./app.js?v=0159b5b00e48"></script>
+  <script defer src="./app.js?v=132905c151ba"></script>
 </head>
 <body>
 <aside class="rail">
@@ -16,7 +16,7 @@
   <nav aria-label="模块导航">
     <button class="nav-button active" data-view="overview"><span>◉</span>运行总览<i>01</i></button>
     <button class="nav-button" data-view="signals"><span>⌁</span>惯导分析<i>02</i></button>
-    <button class="nav-button" data-view="events"><span>◇</span>异常事件<i>03</i></button>
+    <button class="nav-button" data-view="events"><span>◇</span>阈值事件<i>03</i></button>
     <button class="nav-button" data-view="fleet"><span>▦</span>设备与规则<i>04</i></button>
     <button class="nav-button" data-view="quality"><span>◷</span>数据质量<i>05</i></button>
     <button class="nav-button" data-view="offline"><span>⇧</span>离线解析<i>06</i></button>
@@ -34,7 +34,7 @@
     <button class="button primary" id="queryBtn">应用筛选 <span>↗</span></button>
     <div class="time-shortcuts">
       <label class="anchor-label">快捷范围终点<select id="timeAnchor"><option value="now">截至现在</option><option value="latest">截至最新采样</option></select></label>
-      <div class="quick-range" aria-label="快捷时间范围"><button data-range="900" aria-pressed="false">15 分钟</button><button data-range="3600" class="selected" aria-pressed="true">1 小时</button><button data-range="86400" aria-pressed="false">24 小时</button></div>
+      <div class="quick-range" aria-label="快捷时间范围"><button data-range="900" aria-pressed="false">15 分钟</button><button data-range="3600" class="selected" aria-pressed="true">1 小时</button><button data-range="86400" aria-pressed="false">24 小时</button><button data-range="172800" aria-pressed="false">48 小时</button><button data-range="345600" aria-pressed="false">96 小时</button><button data-range="432000" aria-pressed="false">5 天</button><button data-range="864000" aria-pressed="false">10 天</button><button data-range="2592000" aria-pressed="false">30 天</button></div>
       <label class="follow-label"><input type="checkbox" id="autoRefresh" checked>每 15 秒跟随所选终点</label>
     </div>
   </section>
@@ -46,6 +46,13 @@
   <div id="loading" class="loading" hidden><span></span>正在读取并聚合真实采样与事件…</div>
   <section id="overviewView" class="view">
     <div class="kpis" id="kpis"></div>
+    <section class="panel speed-panel"><div class="panel-head"><div><p class="eyebrow">03 / MOTION PROFILE</p><h2>GPCHCX 地面速度剖面 <span class="h2-unit">km/h · speed / V_2D</span> <span class="threshold-key"><i aria-hidden="true"></i>橙色虚线：报警阈值</span></h2><p class="chart-sync-note">运动点保留原始 GPCHCX.speed，三轴振动判静止时置 0，明显漂移点留空。实线为桶内范围，虚线为均值；不用 Ve/Vn 合成、平滑或插值，不是轮速真值。</p></div><button class="text-button" data-goto="signals">全部惯导信号 ↗</button></div><div class="chart speed-chart" id="speedChart"></div></section>
+    <section class="panel vibration-panel vibration-overview vibration-range" aria-labelledby="overviewVibrationTitle">
+      <div class="vibration-head"><div><p class="eyebrow">04 / VIBRATION RANGE</p><h2 id="overviewVibrationTitle">筛选时段振动曲线 <span class="h2-unit">10 Hz 输入 · 分层聚合</span></h2><p>覆盖当前筛选时间；曲线按等时桶给出动态 RMS、峰值偏差和样本数，悬停可读取具体值。</p></div><span id="overviewVibrationState" class="status-pill">等待采样</span></div>
+      <div class="vibration-metrics" id="overviewVibrationMetrics" aria-live="polite"></div>
+      <div class="vibration-chart-grid"><section><div class="vibration-chart-label"><b>动态振动幅值</b><span>桶内 RMS · 峰值偏差 · 不插值</span></div><div class="chart vibration-time-chart" id="overviewVibrationTimeChart" aria-label="筛选时段振动 RMS 和峰值曲线"></div></section><section><div class="vibration-chart-label"><b>最大幅值 60 秒诊断频谱</b><span>筛选时段内 · Hann 窗 FFT</span></div><div class="chart vibration-spectrum-chart" id="overviewVibrationSpectrumChart" aria-label="筛选时段内最大幅值 60 秒低频振动傅里叶幅值谱"></div></section></div>
+      <p class="vibration-note" id="overviewVibrationNote">10 Hz 只能观察 0–4 Hz 低频载体振动；诊断频谱选择筛选时段内去趋势动态 RMS 最大的连续 60 秒窗，不用于高频机械故障诊断。</p>
+    </section>
     <div class="workspace-grid">
       <section class="panel map-panel"><div class="panel-head"><div><p class="eyebrow">01 / GEOSPATIAL</p><h2>运行轨迹</h2></div><div class="legend"><span class="legend-line"></span>有效轨迹 <span class="legend-dot"></span>事件<button class="text-button" id="fitMap">适配轨迹 ↗</button></div></div>
         <div id="map" aria-label="设备运行轨迹地图"></div><div id="tileNotice" class="tile-notice" hidden>部分高德底图未能加载，轨迹和原始坐标仍可查看。请检查网络后重试。</div>
@@ -54,22 +61,15 @@
       </section>
       <section class="panel snapshot-panel"><div class="panel-head"><div><p class="eyebrow">LIVE / DEVICE SNAPSHOT</p><h2>设备最新状态</h2></div><span id="deviceOnline" class="status-pill">--</span></div><div id="deviceSnapshot"></div><div class="mini-compass"><div class="compass-grid"><span class="north">N</span><span class="east">E</span><span class="south">S</span><span class="west">W</span><div id="headingNeedle" class="needle">▲</div></div><div><small>航向角</small><strong id="headingValue">--<em>°</em></strong><span id="headingNote">请先完成惯导初始化</span></div></div><div id="warningSummary" class="warning-summary"></div></section>
     </div>
-    <section class="panel speed-panel"><div class="panel-head"><div><p class="eyebrow">03 / MOTION PROFILE</p><h2>分级地速剖面 <span class="h2-unit">km/h · 可信 / 参考</span> <span class="threshold-key"><i aria-hidden="true"></i>橙色虚线：报警阈值</span></h2><p class="chart-sync-note">绿色保留可信值范围与均值，持续静止为 0。紫色点线为连续合格导航的低速参考估计；悬停查看误差包络，不计最高速度、里程或告警。同桶可含不同等级采样，缺测不连线；不是轮速或全程真实最高速度。</p></div><button class="text-button" data-goto="signals">全部惯导信号 ↗</button></div><div class="chart speed-chart" id="speedChart"></div></section>
-    <section class="panel vibration-panel vibration-overview vibration-range" aria-labelledby="overviewVibrationTitle">
-      <div class="vibration-head"><div><p class="eyebrow">04 / VIBRATION RANGE</p><h2 id="overviewVibrationTitle">筛选时段振动曲线 <span class="h2-unit">10 Hz 输入 · 分层聚合</span></h2><p>覆盖当前筛选时间；曲线按等时桶给出动态 RMS、峰值偏差和样本数，悬停可读取具体值。</p></div><span id="overviewVibrationState" class="status-pill">等待采样</span></div>
-      <div class="vibration-metrics" id="overviewVibrationMetrics" aria-live="polite"></div>
-      <div class="vibration-chart-grid"><section><div class="vibration-chart-label"><b>动态振动幅值</b><span>桶内 RMS · 峰值偏差 · 不插值</span></div><div class="chart vibration-time-chart" id="overviewVibrationTimeChart" aria-label="筛选时段振动 RMS 和峰值曲线"></div></section><section><div class="vibration-chart-label"><b>最大幅值 60 秒诊断频谱</b><span>筛选时段内 · Hann 窗 FFT</span></div><div class="chart vibration-spectrum-chart" id="overviewVibrationSpectrumChart" aria-label="筛选时段内最大幅值 60 秒低频振动傅里叶幅值谱"></div></section></div>
-      <p class="vibration-note" id="overviewVibrationNote">10 Hz 只能观察 0–4 Hz 低频载体振动；诊断频谱选择筛选时段内去趋势动态 RMS 最大的连续 60 秒窗，不用于高频机械故障诊断。</p>
-    </section>
-    <div class="bottom-grid"><section class="panel"><div class="panel-head"><div><p class="eyebrow">OPERATIONS</p><h2>行程与停留</h2></div><span class="muted">连续 ≥30 秒的区段</span></div><div id="segments"></div></section><section class="panel"><div class="panel-head"><div><p class="eyebrow">ATTENTION</p><h2>需要关注</h2></div><button class="text-button" data-goto="events">全部事件 ↗</button></div><div id="eventPreview"></div></section></div>
+    <section class="panel attention-panel"><div class="panel-head"><div><p class="eyebrow">ATTENTION / AUTO</p><h2>需要关注</h2></div><button class="text-button" data-goto="events">查看阈值事件 ↗</button></div><div id="eventPreview" aria-live="polite"></div></section>
   </section>
   <section id="signalsView" class="view" hidden><div class="section-intro"><div><h2>惯导信号工作台</h2><p>按字段口径聚合展示速度、姿态、比力、位置质量与导航状态；初始化、未定向和低速航迹角原值保留，以状态提示说明可用性；缺测仍不补零、不插值。<span class="threshold-key"><i aria-hidden="true"></i>橙色虚线为当前报警阈值</span>。</p></div><span id="aggregationLabel" class="status-pill"></span></div>
     <section class="panel decision-curves-panel" aria-labelledby="signalDecisionTitle">
       <div class="panel-head decision-curves-head"><div><p class="eyebrow">05 / DERIVED DECISION</p><h2 id="signalDecisionTitle">工况判定曲线 <span class="h2-unit">当前筛选 · 独立判定</span></h2><p>急加减速与三轴冲击拆分显示；虚线为判定参考线，事件峰值保留在曲线上。</p></div><span class="status-pill">独立判定</span></div>
       <div class="decision-chart-grid"><section><div class="vibration-chart-label"><b>急加减速判定</b><span>速度变化率 · m/s² · 正加速 / 负减速</span></div><div class="chart decision-chart" id="signalAccelerationChart" aria-label="急加减速判定曲线"></div><p class="signal-data-note" id="signalAccelerationNote"></p></section><section><div class="vibration-chart-label"><b>三轴冲击判定</b><span>合成比力峰值偏差 · g</span></div><div class="chart decision-chart" id="signalShockChart" aria-label="三轴冲击判定曲线"></div><p class="signal-data-note" id="signalShockNote"></p></section></div>
     </section>
-    <div class="signal-grid" id="signalCharts"></div><section class="panel method-note"><h3>读图说明</h3><p>可信地速使用 √(Ve²+Vn²)，按导航状态、速度标准差、同源字段一致性和时间连续性筛选。持续 2 秒低速、低不确定度且 IMU 安静才归零；匀速不会因比力接近 1 g 被判静止。初始化、纯惯导或证据不足留空。运行和静止期间的有效导航位置都绘制，只隔离无法由相邻速度解释的明显漂移点。加速度为保留重力的比力，安装倾斜时某轴接近 1g、横滚接近 -90° 均可能正常；原值及判定原因见数据质量页。振动窗只反映 10 Hz 输入可见的低频载体变化，不是高频机械故障或人体舒适度评级。</p></section></section>
-  <section id="eventsView" class="view" hidden><div class="section-intro"><div><h2>异常事件与处置台账</h2><p>运行预警使用过滤后的有效测量；定位、设备和链路质量提示保留。被隔离的数值见数据质量页，业务阈值不等同于法定违规认定。</p></div><select id="eventFilter" aria-label="事件筛选"><option value="all">全部事件</option><option value="warning">仅预警</option><option value="info">仅数据质量</option><option value="open">待处理</option><option value="resolved">已关闭</option></select></div><div id="eventList" class="panel"></div></section>
+    <div class="signal-grid" id="signalCharts"></div><section class="panel method-note"><h3>读图说明</h3><p>地速只使用 GPCHCX.speed（V_2D）：三轴合成峰值偏差 ≤ 0.01 g 时判静止并置 0，超过阈值时判运动并保留原始值；明显导航漂移点留空。里程只积分两端均为运动、定位连续的相邻速度，有效运动时间采用同一运动判定。Ve/Vn、速度标准差、坐标差分、平滑和插值不参与估速。加速度保留重力分量；振动窗只反映 10 Hz 输入可见的低频载体变化，不是高频机械故障或人体舒适度评级。</p></section></section>
+  <section id="eventsView" class="view" hidden><div class="section-intro event-intro"><div><p class="eyebrow">THRESHOLD EVENTS / 03</p><h2>阈值超限事件</h2><p>系统从当前筛选范围内的数据质量通过测量自动合并事件；只关注速度、加速度、俯仰/横滚角与振动值超限。数据本身异常请前往数据质量页。</p></div><label class="event-filter-label">事件类型<select id="eventFilter" aria-label="事件类型筛选"><option value="all">全部阈值事件</option><option value="speed">速度</option><option value="acceleration">加速度</option><option value="attitude">俯仰 / 横滚</option><option value="vibration">振动</option></select></label></div><div id="eventSummary" class="event-summary" aria-live="polite"></div><section id="eventTop10" class="panel event-top10-panel" aria-live="polite"></section><div id="eventList" class="panel"></div></section>
   <section id="fleetView" class="view" hidden><div class="section-intro"><div><h2>设备档案与业务规则</h2><p>设备按 SN 自动发现，公网 IP 变化不会拆分设备。设置独立生效，不改动设备端参数。</p></div><span class="status-pill">SN 独立隔离</span></div><div id="fleetList" class="fleet-grid"></div><section class="panel settings-panel"><div class="panel-head"><div><p class="eyebrow">CONFIGURATION</p><h2>当前设备配置</h2></div><span id="ruleVersion" class="muted"></span></div><form id="deviceForm"><div class="form-grid"><label>设备名称<input name="name" maxlength="80" required></label><label>车辆 / 载体编号<input name="vehicle" maxlength="80" placeholder="待绑定车辆"></label><label>所属车队 / 项目<input name="fleet" maxlength="80" placeholder="例如：运输测试组"></label></div><label class="mount-check"><input name="mount_confirmed" type="checkbox">已确认安装方向、车辆姿态参考系和标定，允许启用车身姿态与冲击业务预警</label><div class="rule-grid" id="ruleFields"></div><div class="settings-footer"><p>所有数值均为可调整的工程起始值。新规则仅用于后续采样，历史事件保留当时版本。修改需要管理员权限。</p><button type="submit" class="button primary" id="saveDevice">保存配置 ↗</button></div></form></section></section>
   <section id="qualityView" class="view" hidden><div class="section-intro"><div><h2>从原始报文到可信测量</h2><p>按存储策略留存接收证据，分开呈现接收成功、校验通过和定位质量。</p></div></div><div id="filterSummary"></div><section class="panel quarantine-panel"><div class="panel-head"><div><p class="eyebrow">MEASUREMENT REVIEW / 原值留档</p><h2>异常数据隔离台账</h2></div><button class="text-button" id="exportExcluded">导出当前筛选原值 ↓</button></div><div class="quarantine-toolbar"><label>剔除原因<select id="qualityReason" aria-label="剔除原因"><option value="anomaly">全部异常剔除（待复核）</option><option value="all">全部剔除字段</option></select></label><span id="quarantineCount" aria-live="polite"></span></div><p class="quarantine-scroll-hint">表格可左右滑动，右侧可查看原值和核验原报文。</p><div id="quarantineList"><div class="empty">请查询设备时间段</div></div><div class="quarantine-pagination"><button id="qualityPrev" class="button secondary" disabled>上一页</button><span id="qualityPage"></span><button id="qualityNext" class="button secondary" disabled>下一页</button></div></section><div id="qualityContent"></div><section class="panel method-note"><h3>标准参考与能力边界</h3><p>功能参考道路运输车辆动态监控的轨迹、速度、事件和处置台账需求。CGI 使用厂商 GPCHCX 协议，本系统不是 JT/T 808 终端，也不宣称通过 JT/T 796 平台符合性认证。</p><p>未接入司机身份、车辆 CAN、油耗和路段限速，不输出疲劳驾驶、油耗或真实道路超速结论。未进行 ISO 2631 频率加权，不把冲击候选称为人体舒适度等级。磁盘达 80% 后按策略清理最旧车载数据，保护最近 24 小时及活动文件；长期留档需另行备份。</p><p><a href="https://xxgk.mot.gov.cn/jigou/fgs/202202/t20220224_3642995.html" target="_blank" rel="noopener">道路运输车辆动态监督管理办法（2022 修正） ↗</a> · <a href="https://xxgk.mot.gov.cn/2020/jigou/ysfws/202006/t20200623_3315356.html" target="_blank" rel="noopener">终端和平台标准符合性技术审查规范 ↗</a></p><p>协议来源：CHC CGI-430 用户手册 V2.4.4，§1.4.1 / §1.4.2（第 5–12 页）。单位按该手册 IMU/CAN 定义采用 g、°/s；GPS 转 UTC 使用历史闰秒表，2017 年后为 18 秒，后续闰秒变更需维护。</p></section></section>
   <section id="offlineView" class="view" hidden>
@@ -88,7 +88,7 @@
       </section>
       <aside class="offline-manifest panel">
         <p class="eyebrow">FORMAT CONTROL / 02</p><h2>文件进入前，先核对边界</h2>
-        <ol><li><b>结构</b><span>字段、顺序、过滤版本与有效数据导出一致</span></li><li><b>范围</b><span>单设备、最长 31 天、时间顺序不可倒置</span></li><li><b>口径</b><span>空值不补零；异常事件按当前规则重新计算</span></li><li><b>隔离</b><span>不新增在线采样、设备、事件或审计记录</span></li></ol>
+        <ol><li><b>结构</b><span>字段、顺序、过滤版本与有效数据导出一致</span></li><li><b>范围</b><span>单设备、最长 31 天、时间顺序不可倒置</span></li><li><b>口径</b><span>空值不补零；阈值事件按当前规则重新计算</span></li><li><b>隔离</b><span>不新增在线采样、设备、事件或审计记录</span></li></ol>
         <p class="offline-caveat">CSV.GZ 内部字段与“导出有效数据”完全一致，仅压缩传输。系统逐行解析并按时长自适应形成源桶，不把整份大文件装入内存；10 天数据使用 10 分钟源桶。过滤后的文件不能恢复隔离台账中的异常原值；离线事件没有在线处置状态。</p>
       </aside>
     </div>
@@ -99,8 +99,8 @@
         <section class="panel map-panel"><div class="panel-head"><div><p class="eyebrow">TRACE RECONSTRUCTION</p><h2>离线运行轨迹</h2></div><button class="text-button" id="offlineFitMap">适配轨迹 ↗</button></div><div id="offlineMap" aria-label="离线设备运行轨迹地图"></div><div id="offlineTileNotice" class="tile-notice" hidden>部分高德底图未能加载，轨迹与 WGS84 坐标分析不受影响。</div><div class="map-footer"><span id="offlineCoordinateReadout">选择文件后生成轨迹</span><span>高德 GCJ-02 · 分析坐标 WGS84</span></div></section>
         <section class="panel offline-facts"><div class="panel-head"><div><p class="eyebrow">FILE MANIFEST</p><h2>分析清单</h2></div></div><div id="offlineFacts"></div></section>
       </div>
-      <section class="panel speed-panel"><div class="panel-head"><div><p class="eyebrow">MOTION PROFILE</p><h2>离线分级地速 <span class="h2-unit">km/h</span></h2><p class="chart-sync-note">绿色：可信范围 / 均值；紫色点线：参考估计，不参与最高速度、里程或告警。悬停查看参考误差包络。</p></div></div><div class="chart speed-chart" id="offlineSpeedChart"></div></section>
-      <div class="bottom-grid offline-bottom"><section class="panel"><div class="panel-head"><div><p class="eyebrow">TRIP SEGMENTS</p><h2>行程与停留</h2></div><span class="muted">连续 ≥30 秒</span></div><div id="offlineSegments"></div></section><section class="panel"><div class="panel-head"><div><p class="eyebrow">RULE REPLAY</p><h2>异常告警候选</h2></div><span id="offlineEventCount" class="status-pill"></span></div><div id="offlineEvents"></div></section></div>
+      <section class="panel speed-panel"><div class="panel-head"><div><p class="eyebrow">MOTION PROFILE</p><h2>离线 GPCHCX 地速 <span class="h2-unit">km/h</span></h2><p class="chart-sync-note">运动点为原始 speed，振动静止点为 0，明显漂移点留空；实线为桶内范围，虚线为均值。</p></div></div><div class="chart speed-chart" id="offlineSpeedChart"></div></section>
+      <div class="bottom-grid offline-bottom"><section class="panel"><div class="panel-head"><div><p class="eyebrow">TRIP SEGMENTS</p><h2>行程与停留</h2></div><span class="muted">连续 ≥30 秒</span></div><div id="offlineSegments"></div></section><section class="panel"><div class="panel-head"><div><p class="eyebrow">RULE REPLAY</p><h2>阈值事件</h2></div><span id="offlineEventCount" class="status-pill"></span></div><div id="offlineEvents"></div></section></div>
       <div class="section-intro offline-signal-title"><div><h2>离线惯导信号工作台</h2><p>与在线图表使用相同的时间桶和有效值口径，完整展示均值及峰值包络。</p></div><span id="offlineAggregationLabel" class="status-pill"></span></div>
       <div class="signal-grid" id="offlineSignalCharts"></div>
     </div>
@@ -108,6 +108,5 @@
   <footer class="page-footer"><span>CTMC QUALITY OS <b>/</b> CGI DATA SERVICE</span><span>真实报文 · 可追溯 · 规则版本留痕</span></footer>
 </main>
 <dialog id="pointDialog"><div class="dialog-head"><h2>采样证据</h2><button data-close="pointDialog" aria-label="关闭采样详情">×</button></div><div id="pointDetail"></div></dialog>
-  <dialog id="reviewDialog"><div class="dialog-head"><h2>事件处置</h2><button data-close="reviewDialog" aria-label="关闭事件处置">×</button></div><form id="reviewForm"><input name="event_id" type="hidden"><label>状态<select name="status"><option value="acknowledged">已确认</option><option value="resolved">已关闭</option><option value="open">重新打开</option></select></label><label>处置说明<textarea name="note" maxlength="1000" rows="4" placeholder="记录检查结果、原因或处理措施；关闭事件必填"></textarea></label><button class="button primary" type="submit">保存处置记录</button></form></dialog>
   <dialog id="stationaryDialog"><div class="dialog-head"><h2>关闭持续静止状态</h2><button data-close="stationaryDialog" aria-label="关闭对话框">×</button></div><form id="stationaryForm"><input name="context_id" type="hidden"><p class="dialog-note">请在设备开始移动前关闭。页面仅处理最新采样之后的边界；已经发生的历史误过滤需要运维回算。</p><label>恢复普通运动规则的时间 · 北京时间<input name="end" type="datetime-local" step="1" required></label><label>操作原因<textarea name="reason" maxlength="300" rows="3" required placeholder="例如：车辆即将出发，现场操作员张三确认"></textarea></label><button class="button primary" type="submit">确认关闭并保留审计记录</button></form></dialog>
 </body></html>
